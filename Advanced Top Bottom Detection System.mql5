@@ -1,0 +1,1514 @@
+//+------------------------------------------------------------------+
+//|                    Advanced Top/Bottom Detection System v1.0      |
+//|                        Complete Implementation of 10 Indicators   |
+//+------------------------------------------------------------------+
+#property copyright "Hamoon Algo Ltd"
+#property version   "1.00"
+#property indicator_separate_window
+#property indicator_buffers 20
+#property indicator_plots   7
+
+#property indicator_label1  "Main Signal"
+#property indicator_type1   DRAW_LINE
+#property indicator_color1  clrDodgerBlue
+#property indicator_width1  2
+
+#property indicator_label2  "Signal Line"
+#property indicator_type2   DRAW_LINE
+#property indicator_color2  clrOrange
+#property indicator_width2  1
+#property indicator_style2  STYLE_DOT
+
+#property indicator_label3  "Upper Band"
+#property indicator_type3   DRAW_LINE
+#property indicator_color3  clrRed
+#property indicator_width3  1
+#property indicator_style3  STYLE_DASH
+
+#property indicator_label4  "Lower Band"
+#property indicator_type4   DRAW_LINE
+#property indicator_color4  clrLime
+#property indicator_width4  1
+#property indicator_style4  STYLE_DASH
+
+#property indicator_label5  "Histogram"
+#property indicator_type5   DRAW_HISTOGRAM
+#property indicator_color5  clrGray
+#property indicator_width5  2
+
+#property indicator_label6  "Buy Signals"
+#property indicator_type6   DRAW_ARROW
+#property indicator_color6  clrLime
+#property indicator_width6  3
+
+#property indicator_label7  "Sell Signals"
+#property indicator_type7   DRAW_ARROW
+#property indicator_color7  clrRed
+#property indicator_width7  3
+
+//--- Enumerations
+enum ENUM_INDICATOR_TYPE
+{
+   INDICATOR_CVDPI,    // 1. Composite Volume Delta Pressure (9.5/10)
+   INDICATOR_LVZ,      // 2. Liquidity Vacuum Zones (9.3/10)
+   INDICATOR_ARSM,     // 3. Adaptive Regime-Switching Momentum (9.1/10)
+   INDICATOR_FDMEI,    // 4. Fractal Dimension Market Efficiency (8.9/10)
+   INDICATOR_SMDC,     // 5. Smart Money Divergence Composite (8.7/10)
+   INDICATOR_VCMR,     // 6. Volatility Clustering Mean Reversion (8.5/10)
+   INDICATOR_OIM,      // 7. Orderflow Imbalance Momentum (8.3/10)
+   INDICATOR_SCAI,     // 8. Spectral Cycle Analysis (8.1/10)
+   INDICATOR_MEG,      // 9. Momentum Exhaustion Gradient (7.9/10)
+   INDICATOR_IVSR      // 10. Implied Volatility Skew Reversal (7.7/10)
+};
+
+//--- Input parameters
+input group "========== Indicator Selection =========="
+input ENUM_INDICATOR_TYPE InpIndicatorType = INDICATOR_CVDPI; // Select Indicator
+
+input group "========== General Parameters =========="
+input int InpShortPeriod = 14;           // Short Period
+input int InpMediumPeriod = 50;          // Medium Period  
+input int InpLongPeriod = 200;           // Long Period
+input int InpSignalPeriod = 14;          // Signal Period
+
+input group "========== CVDPI Settings =========="
+input int InpCVDPI_CumulativePeriod = 20;     // CVDPI: Cumulative Delta Period
+input int InpCVDPI_FastEMA = 14;              // CVDPI: Fast EMA
+input int InpCVDPI_SlowEMA = 50;              // CVDPI: Slow EMA
+input int InpCVDPI_AccelPeriod = 5;           // CVDPI: Acceleration Period
+input double InpCVDPI_ExtremeBuy = 80.0;      // CVDPI: Extreme Buy Level
+input double InpCVDPI_ExtremeSell = -80.0;    // CVDPI: Extreme Sell Level
+
+input group "========== LVZ Settings =========="
+input int InpLVZ_VolumeProfilePeriod = 100;   // LVZ: Volume Profile Period
+input double InpLVZ_HighVolumeThreshold = 1.5;// LVZ: High Volume Threshold
+input double InpLVZ_LowVolumeThreshold = 0.3; // LVZ: Low Volume Threshold
+input int InpLVZ_MinConfluence = 3;           // LVZ: Minimum Confluence Score
+
+input group "========== ARSM Settings =========="
+input int InpARSM_VolatilityPeriod = 20;      // ARSM: Volatility Period
+input int InpARSM_HistoricalPeriod = 100;     // ARSM: Historical Volatility Period
+input double InpARSM_LowVolThreshold = 0.7;   // ARSM: Low Volatility Threshold
+input double InpARSM_HighVolThreshold = 1.3;  // ARSM: High Volatility Threshold
+input double InpARSM_ExhaustionSigma = 3.0;   // ARSM: Exhaustion Sigma Level
+
+input group "========== FDMEI Settings =========="
+input int InpFDMEI_FractalPeriod = 100;       // FDMEI: Fractal Calculation Period
+input int InpFDMEI_TrendEMAFast = 20;         // FDMEI: Trend EMA Fast
+input int InpFDMEI_TrendEMASlow = 50;         // FDMEI: Trend EMA Slow
+input double InpFDMEI_MeanRevertThreshold = 1.5; // FDMEI: Mean Revert Threshold
+input double InpFDMEI_TrendingThreshold = 1.3;   // FDMEI: Trending Threshold
+
+input group "========== SMDC Settings =========="
+input int InpSMDC_VolumeSpikePeriod = 20;     // SMDC: Volume Spike Period
+input double InpSMDC_VolumeSpikeMultiplier = 3.0; // SMDC: Volume Spike Multiplier
+input double InpSMDC_AbsorptionThreshold = 0.3;   // SMDC: Absorption Threshold
+input double InpSMDC_SignalThreshold = 2.5;       // SMDC: Signal Threshold
+
+input group "========== VCMR Settings =========="
+input int InpVCMR_VolatilityPeriod = 20;      // VCMR: Volatility Period
+input int InpVCMR_VolatilityMA = 50;          // VCMR: Volatility MA Period
+input double InpVCMR_VolSpikeMult = 1.5;      // VCMR: Volatility Spike Multiplier
+input int InpVCMR_ClusterWindow = 10;         // VCMR: Cluster Window
+input double InpVCMR_ReversionThreshold = 0.85;   // VCMR: Reversion Threshold
+
+input group "========== OIM Settings =========="
+input int InpOIM_DeltaPeriod = 20;            // OIM: Delta Accumulation Period
+input int InpOIM_FastEMA = 5;                 // OIM: Fast EMA
+input int InpOIM_SlowEMA = 20;                // OIM: Slow EMA
+input int InpOIM_AccelPeriod = 3;             // OIM: Acceleration Period
+input double InpOIM_ExtremeLevel = 0.7;       // OIM: Extreme Level
+
+input group "========== SCAI Settings =========="
+input int InpSCAI_FFTPeriod = 256;            // SCAI: FFT Period (power of 2)
+input int InpSCAI_DominantCycles = 3;         // SCAI: Number of Dominant Cycles
+input double InpSCAI_PhaseTopDegrees = 90.0;  // SCAI: Phase Top Degrees
+input double InpSCAI_PhaseBottomDegrees = 270.0; // SCAI: Phase Bottom Degrees
+
+input group "========== MEG Settings =========="
+input int InpMEG_Period1 = 5;      // MEG: Momentum Period 1
+input int InpMEG_Period2 = 10;     // MEG: Momentum Period 2
+input int InpMEG_Period3 = 20;     // MEG: Momentum Period 3
+input int InpMEG_Period4 = 50;     // MEG: Momentum Period 4
+input int InpMEG_Period5 = 100;    // MEG: Momentum Period 5
+input int InpMEG_NormalizationPeriod = 50;    // MEG: Normalization Period
+input double InpMEG_ExhaustionThreshold = 2.5;    // MEG: Exhaustion Threshold
+input double InpMEG_DivergenceThreshold = 0.8;    // MEG: Divergence Threshold
+
+input group "========== IVSR Settings =========="
+input int InpIVSR_ATRPeriod = 14;             // IVSR: ATR Period
+input int InpIVSR_SkewChangePeriod = 5;       // IVSR: Skew Change Period
+input int InpIVSR_AccelerationPeriod = 3;     // IVSR: Acceleration Period
+input int InpIVSR_HistoricalPeriod = 100;     // IVSR: Historical Period
+input double InpIVSR_ZScoreThreshold = 2.0;   // IVSR: Z-Score Threshold
+
+input group "========== Display Settings =========="
+input bool InpShowBuySignals = true;          // Show Buy Signals
+input bool InpShowSellSignals = true;         // Show Sell Signals
+input bool InpShowAlerts = true;              // Enable Alerts
+input bool InpSendNotifications = false;      // Send Push Notifications
+input color InpBuySignalColor = clrLime;      // Buy Signal Color
+input color InpSellSignalColor = clrRed;      // Sell Signal Color
+
+//--- Indicator buffers
+double BufferMain[];
+double BufferSignal[];
+double BufferUpper[];
+double BufferLower[];
+double BufferHistogram[];
+double BufferBuySignal[];
+double BufferSellSignal[];
+
+//--- Working buffers
+double BufferWork1[];
+double BufferWork2[];
+double BufferWork3[];
+double BufferWork4[];
+double BufferWork5[];
+double BufferWork6[];
+double BufferWork7[];
+double BufferWork8[];
+double BufferWork9[];
+double BufferWork10[];
+double BufferWork11[];
+double BufferWork12[];
+double BufferWork13[];
+
+//--- Global variables
+int g_atr_handle = INVALID_HANDLE;
+datetime g_last_alert_time = 0;
+string g_indicator_name = "";
+
+//+------------------------------------------------------------------+
+//| Custom indicator initialization function                         |
+//+------------------------------------------------------------------+
+int OnInit()
+{
+   //--- Set indicator buffers
+   SetIndexBuffer(0, BufferMain, INDICATOR_DATA);
+   SetIndexBuffer(1, BufferSignal, INDICATOR_DATA);
+   SetIndexBuffer(2, BufferUpper, INDICATOR_DATA);
+   SetIndexBuffer(3, BufferLower, INDICATOR_DATA);
+   SetIndexBuffer(4, BufferHistogram, INDICATOR_DATA);
+   SetIndexBuffer(5, BufferBuySignal, INDICATOR_DATA);
+   SetIndexBuffer(6, BufferSellSignal, INDICATOR_DATA);
+   
+   //--- Working buffers
+   SetIndexBuffer(7, BufferWork1, INDICATOR_CALCULATIONS);
+   SetIndexBuffer(8, BufferWork2, INDICATOR_CALCULATIONS);
+   SetIndexBuffer(9, BufferWork3, INDICATOR_CALCULATIONS);
+   SetIndexBuffer(10, BufferWork4, INDICATOR_CALCULATIONS);
+   SetIndexBuffer(11, BufferWork5, INDICATOR_CALCULATIONS);
+   SetIndexBuffer(12, BufferWork6, INDICATOR_CALCULATIONS);
+   SetIndexBuffer(13, BufferWork7, INDICATOR_CALCULATIONS);
+   SetIndexBuffer(14, BufferWork8, INDICATOR_CALCULATIONS);
+   SetIndexBuffer(15, BufferWork9, INDICATOR_CALCULATIONS);
+   SetIndexBuffer(16, BufferWork10, INDICATOR_CALCULATIONS);
+   SetIndexBuffer(17, BufferWork11, INDICATOR_CALCULATIONS);
+   SetIndexBuffer(18, BufferWork12, INDICATOR_CALCULATIONS);
+   SetIndexBuffer(19, BufferWork13, INDICATOR_CALCULATIONS);
+   
+   //--- Set arrow codes for signals
+   PlotIndexSetInteger(5, PLOT_ARROW, 233); // Buy arrow
+   PlotIndexSetInteger(6, PLOT_ARROW, 234); // Sell arrow
+   
+   //--- Set colors
+   PlotIndexSetInteger(5, PLOT_LINE_COLOR, InpBuySignalColor);
+   PlotIndexSetInteger(6, PLOT_LINE_COLOR, InpSellSignalColor);
+   
+   //--- Create ATR handle
+   g_atr_handle = iATR(_Symbol, _Period, InpShortPeriod);
+   if(g_atr_handle == INVALID_HANDLE)
+   {
+      Print("Failed to create ATR indicator handle");
+      return(INIT_FAILED);
+   }
+   
+   //--- Set indicator name based on selection
+   switch(InpIndicatorType)
+   {
+      case INDICATOR_CVDPI:
+         g_indicator_name = "CVDPI - Composite Volume Delta Pressure (9.5/10)";
+         break;
+      case INDICATOR_LVZ:
+         g_indicator_name = "LVZ - Liquidity Vacuum Zones (9.3/10)";
+         break;
+      case INDICATOR_ARSM:
+         g_indicator_name = "ARSM - Adaptive Regime-Switching Momentum (9.1/10)";
+         break;
+      case INDICATOR_FDMEI:
+         g_indicator_name = "FDMEI - Fractal Dimension Market Efficiency (8.9/10)";
+         break;
+      case INDICATOR_SMDC:
+         g_indicator_name = "SMDC - Smart Money Divergence Composite (8.7/10)";
+         break;
+      case INDICATOR_VCMR:
+         g_indicator_name = "VCMR - Volatility Clustering Mean Reversion (8.5/10)";
+         break;
+      case INDICATOR_OIM:
+         g_indicator_name = "OIM - Orderflow Imbalance Momentum (8.3/10)";
+         break;
+      case INDICATOR_SCAI:
+         g_indicator_name = "SCAI - Spectral Cycle Analysis (8.1/10)";
+         break;
+      case INDICATOR_MEG:
+         g_indicator_name = "MEG - Momentum Exhaustion Gradient (7.9/10)";
+         break;
+      case INDICATOR_IVSR:
+         g_indicator_name = "IVSR - Implied Volatility Skew Reversal (7.7/10)";
+         break;
+   }
+   
+   IndicatorSetString(INDICATOR_SHORTNAME, g_indicator_name);
+   IndicatorSetInteger(INDICATOR_DIGITS, 2);
+   
+   //--- Initialize arrays
+   ArraySetAsSeries(BufferMain, true);
+   ArraySetAsSeries(BufferSignal, true);
+   ArraySetAsSeries(BufferUpper, true);
+   ArraySetAsSeries(BufferLower, true);
+   ArraySetAsSeries(BufferHistogram, true);
+   ArraySetAsSeries(BufferBuySignal, true);
+   ArraySetAsSeries(BufferSellSignal, true);
+   ArraySetAsSeries(BufferWork1, true);
+   ArraySetAsSeries(BufferWork2, true);
+   ArraySetAsSeries(BufferWork3, true);
+   ArraySetAsSeries(BufferWork4, true);
+   ArraySetAsSeries(BufferWork5, true);
+   ArraySetAsSeries(BufferWork6, true);
+   ArraySetAsSeries(BufferWork7, true);
+   ArraySetAsSeries(BufferWork8, true);
+   ArraySetAsSeries(BufferWork9, true);
+   ArraySetAsSeries(BufferWork10, true);
+   ArraySetAsSeries(BufferWork11, true);
+   ArraySetAsSeries(BufferWork12, true);
+   ArraySetAsSeries(BufferWork13, true);
+   
+   return(INIT_SUCCEEDED);
+}
+
+//+------------------------------------------------------------------+
+//| Custom indicator deinitialization function                       |
+//+------------------------------------------------------------------+
+void OnDeinit(const int reason)
+{
+   if(g_atr_handle != INVALID_HANDLE)
+      IndicatorRelease(g_atr_handle);
+}
+
+//+------------------------------------------------------------------+
+//| Custom indicator iteration function                              |
+//+------------------------------------------------------------------+
+int OnCalculate(const int rates_total,
+                const int prev_calculated,
+                const datetime &time[],
+                const double &open[],
+                const double &high[],
+                const double &low[],
+                const double &close[],
+                const long &tick_volume[],
+                const long &volume[],
+                const int &spread[])
+{
+   if(rates_total < InpLongPeriod + 100)
+      return(0);
+      
+   //--- Set arrays as series
+   ArraySetAsSeries(open, true);
+   ArraySetAsSeries(high, true);
+   ArraySetAsSeries(low, true);
+   ArraySetAsSeries(close, true);
+   ArraySetAsSeries(tick_volume, true);
+   ArraySetAsSeries(volume, true);
+   ArraySetAsSeries(time, true);
+   
+   //--- Calculate starting position
+   int start_pos = 0;
+   if(prev_calculated > 0)
+      start_pos = prev_calculated - 1;
+   else
+      start_pos = rates_total - InpLongPeriod - 100;
+   
+   //--- Main calculation loop
+   for(int i = start_pos; i >= 0 && !IsStopped(); i--)
+   {
+      //--- Reset signal buffers
+      BufferBuySignal[i] = EMPTY_VALUE;
+      BufferSellSignal[i] = EMPTY_VALUE;
+      
+      //--- Calculate based on selected indicator
+      switch(InpIndicatorType)
+      {
+         case INDICATOR_CVDPI:
+            CalculateCVDPI(i, rates_total, open, high, low, close, tick_volume, volume);
+            break;
+         case INDICATOR_LVZ:
+            CalculateLVZ(i, rates_total, open, high, low, close, tick_volume, volume);
+            break;
+         case INDICATOR_ARSM:
+            CalculateARSM(i, rates_total, open, high, low, close, tick_volume, volume);
+            break;
+         case INDICATOR_FDMEI:
+            CalculateFDMEI(i, rates_total, open, high, low, close, tick_volume, volume);
+            break;
+         case INDICATOR_SMDC:
+            CalculateSMDC(i, rates_total, open, high, low, close, tick_volume, volume);
+            break;
+         case INDICATOR_VCMR:
+            CalculateVCMR(i, rates_total, open, high, low, close, tick_volume, volume);
+            break;
+         case INDICATOR_OIM:
+            CalculateOIM(i, rates_total, open, high, low, close, tick_volume, volume);
+            break;
+         case INDICATOR_SCAI:
+            CalculateSCAI(i, rates_total, open, high, low, close, tick_volume, volume);
+            break;
+         case INDICATOR_MEG:
+            CalculateMEG(i, rates_total, open, high, low, close, tick_volume, volume);
+            break;
+         case INDICATOR_IVSR:
+            CalculateIVSR(i, rates_total, open, high, low, close, tick_volume, volume);
+            break;
+      }
+      
+      //--- Detect and mark signals
+      DetectSignals(i, rates_total, time, close);
+   }
+   
+   return(rates_total);
+}
+
+//+------------------------------------------------------------------+
+//| RANK 1: Composite Volume Delta Pressure Indicator (CVDPI)       |
+//+------------------------------------------------------------------+
+void CalculateCVDPI(int pos, int rates_total, const double &open[], const double &high[], 
+                    const double &low[], const double &close[], const long &tick_volume[], const long &volume[])
+{
+   if(pos >= rates_total - InpCVDPI_CumulativePeriod - InpCVDPI_SlowEMA)
+   {
+      BufferMain[pos] = 0;
+      BufferSignal[pos] = 0;
+      BufferHistogram[pos] = 0;
+      BufferUpper[pos] = InpCVDPI_ExtremeBuy;
+      BufferLower[pos] = InpCVDPI_ExtremeSell;
+      return;
+   }
+   
+   //--- Calculate Delta per candle
+   double delta = 0;
+   if(high[pos] != low[pos])
+      delta = ((close[pos] - low[pos]) - (high[pos] - close[pos])) / (high[pos] - low[pos]) * (volume[pos] > 0 ? volume[pos] : tick_volume[pos]);
+   
+   BufferWork1[pos] = delta; // Store delta
+   
+   //--- Calculate Cumulative Delta
+   double cumulative_delta = 0;
+   double total_volume = 0;
+   for(int i = 0; i < InpCVDPI_CumulativePeriod && (pos + i) < rates_total; i++)
+   {
+      cumulative_delta += BufferWork1[pos + i];
+      total_volume += (volume[pos + i] > 0 ? volume[pos + i] : tick_volume[pos + i]);
+   }
+   
+   //--- Calculate Volume Pressure
+   double volume_pressure = 0;
+   if(total_volume > 0)
+      volume_pressure = (cumulative_delta / total_volume) * 100.0;
+   
+   BufferWork2[pos] = volume_pressure;
+   
+   //--- Calculate Pressure Momentum (EMA difference)
+   double fast_ema = CalculateEMA(BufferWork2, pos, InpCVDPI_FastEMA, rates_total);
+   double slow_ema = CalculateEMA(BufferWork2, pos, InpCVDPI_SlowEMA, rates_total);
+   double pressure_momentum = fast_ema - slow_ema;
+   
+   BufferWork3[pos] = pressure_momentum;
+   
+   //--- Calculate Acceleration
+   double acceleration = 0;
+   if(pos + InpCVDPI_AccelPeriod < rates_total)
+      acceleration = BufferWork3[pos] - BufferWork3[pos + InpCVDPI_AccelPeriod];
+   
+   BufferWork4[pos] = acceleration;
+   
+   //--- Get ATR for normalization
+   double atr = GetATR(pos);
+   
+   //--- Calculate Signal Strength
+   double signal_strength = 0;
+   if(atr > 0)
+      signal_strength = (pressure_momentum * acceleration) / atr;
+   
+   //--- Store in buffers
+   BufferMain[pos] = volume_pressure;
+   BufferSignal[pos] = pressure_momentum;
+   BufferHistogram[pos] = signal_strength;
+   BufferUpper[pos] = InpCVDPI_ExtremeBuy;
+   BufferLower[pos] = InpCVDPI_ExtremeSell;
+   
+   //--- Store for divergence detection
+   BufferWork5[pos] = signal_strength;
+}
+
+//+------------------------------------------------------------------+
+//| RANK 2: Liquidity Vacuum Zones (LVZ)                            |
+//+------------------------------------------------------------------+
+void CalculateLVZ(int pos, int rates_total, const double &open[], const double &high[],
+                  const double &low[], const double &close[], const long &tick_volume[], const long &volume[])
+{
+   if(pos >= rates_total - InpLVZ_VolumeProfilePeriod)
+   {
+      BufferMain[pos] = 0;
+      BufferSignal[pos] = 0;
+      BufferHistogram[pos] = 0;
+      return;
+   }
+   
+   //--- Calculate Volume Profile
+   double avg_volume = 0;
+   for(int i = 0; i < InpLVZ_VolumeProfilePeriod && (pos + i) < rates_total; i++)
+   {
+      avg_volume += (volume[pos + i] > 0 ? volume[pos + i] : tick_volume[pos + i]);
+   }
+   avg_volume /= InpLVZ_VolumeProfilePeriod;
+   
+   //--- Current volume
+   double current_volume = (volume[pos] > 0 ? volume[pos] : tick_volume[pos]);
+   
+   //--- Classify volume nodes
+   bool is_high_volume = current_volume > (InpLVZ_HighVolumeThreshold * avg_volume);
+   bool is_low_volume = current_volume < (InpLVZ_LowVolumeThreshold * avg_volume);
+   
+   BufferWork1[pos] = is_low_volume ? 1.0 : 0.0; // Low volume flag
+   BufferWork2[pos] = is_high_volume ? 1.0 : 0.0; // High volume flag
+   
+   //--- Calculate distance to nearest liquidity vacuum
+   double vacuum_distance = 0;
+   double vacuum_strength = 0;
+   int confluence_count = 0;
+   
+   //--- Look for vacuum zones in recent price action
+   for(int i = 1; i < 50 && (pos + i) < rates_total; i++)
+   {
+      if(BufferWork1[pos + i] > 0.5) // Found low volume zone
+         confluence_count++;
+   }
+   
+   //--- Calculate magnetic pull strength
+   if(confluence_count >= InpLVZ_MinConfluence)
+   {
+      vacuum_strength = confluence_count * 10.0;
+      vacuum_distance = MathAbs(close[pos] - close[pos + 10]);
+   }
+   
+   //--- Calculate velocity (rate of price change)
+   double velocity = 0;
+   if(pos + 5 < rates_total)
+      velocity = MathAbs(close[pos] - close[pos + 5]) / 5.0;
+   
+   BufferWork3[pos] = velocity;
+   
+   //--- Main signal: Vacuum strength adjusted by velocity
+   double lvz_signal = 0;
+   if(vacuum_strength > 0)
+   {
+      lvz_signal = vacuum_strength / (1.0 + velocity * 10.0);
+      
+      //--- Determine direction
+      if(close[pos] < close[pos + 10])
+         lvz_signal = -lvz_signal; // Approaching from above (potential bottom)
+   }
+   
+   BufferMain[pos] = lvz_signal;
+   BufferSignal[pos] = confluence_count * 10.0;
+   BufferHistogram[pos] = velocity * 100.0;
+   BufferUpper[pos] = InpLVZ_MinConfluence * 10.0;
+   BufferLower[pos] = -InpLVZ_MinConfluence * 10.0;
+}
+
+//+------------------------------------------------------------------+
+//| RANK 3: Adaptive Regime-Switching Momentum (ARSM)               |
+//+------------------------------------------------------------------+
+void CalculateARSM(int pos, int rates_total, const double &open[], const double &high[],
+                   const double &low[], const double &close[], const long &tick_volume[], const long &volume[])
+{
+   if(pos >= rates_total - InpARSM_HistoricalPeriod)
+   {
+      BufferMain[pos] = 0;
+      BufferSignal[pos] = 0;
+      BufferHistogram[pos] = 0;
+      return;
+   }
+   
+   //--- Calculate current volatility
+   double current_volatility = CalculateStdDev(close, pos, InpARSM_VolatilityPeriod, rates_total);
+   
+   //--- Calculate historical average volatility
+   double historical_volatility = 0;
+   for(int i = 0; i < InpARSM_HistoricalPeriod && (pos + i) < rates_total; i++)
+   {
+      historical_volatility += CalculateStdDev(close, pos + i, InpARSM_VolatilityPeriod, rates_total);
+   }
+   historical_volatility /= InpARSM_HistoricalPeriod;
+   
+   //--- Determine regime
+   double regime = 0;
+   if(historical_volatility > 0)
+      regime = current_volatility / historical_volatility;
+   
+   BufferWork1[pos] = regime;
+   
+   //--- Adaptive parameters based on regime
+   int adaptive_period = InpShortPeriod;
+   double upper_threshold = 70.0;
+   double lower_threshold = 30.0;
+   
+   if(regime < InpARSM_LowVolThreshold)
+   {
+      adaptive_period = 21;
+      upper_threshold = 75.0;
+      lower_threshold = 25.0;
+   }
+   else if(regime > InpARSM_HighVolThreshold)
+   {
+      adaptive_period = 8;
+      upper_threshold = 60.0;
+      lower_threshold = 40.0;
+   }
+   
+   //--- Calculate Custom Momentum Score
+   double sma = CalculateSMA(close, pos, adaptive_period, rates_total);
+   double atr = GetATR(pos);
+   double momentum = 0;
+   if(atr > 0)
+      momentum = (close[pos] - sma) / atr;
+   
+   BufferWork2[pos] = momentum;
+   
+   //--- Calculate Momentum Velocity
+   double momentum_velocity = 0;
+   if(pos + 3 < rates_total)
+      momentum_velocity = BufferWork2[pos] - BufferWork2[pos + 3];
+   
+   BufferWork3[pos] = momentum_velocity;
+   
+   //--- Calculate Momentum Acceleration
+   double momentum_acceleration = 0;
+   if(pos + 2 < rates_total)
+      momentum_acceleration = BufferWork3[pos] - BufferWork3[pos + 2];
+   
+   BufferWork4[pos] = momentum_acceleration;
+   
+   //--- Calculate standard deviation of momentum
+   double momentum_std = CalculateStdDev(BufferWork2, pos, 50, rates_total);
+   
+   //--- Exhaustion signal
+   double exhaustion_signal = 0;
+   if(momentum_std > 0)
+   {
+      double sigma_level = momentum / momentum_std;
+      if(MathAbs(sigma_level) > InpARSM_ExhaustionSigma && 
+         ((sigma_level > 0 && momentum_acceleration < 0) || 
+          (sigma_level < 0 && momentum_acceleration > 0)))
+      {
+         exhaustion_signal = sigma_level;
+      }
+   }
+   
+   BufferMain[pos] = momentum;
+   BufferSignal[pos] = momentum_velocity * 10.0;
+   BufferHistogram[pos] = exhaustion_signal;
+   BufferUpper[pos] = InpARSM_ExhaustionSigma;
+   BufferLower[pos] = -InpARSM_ExhaustionSigma;
+}
+
+//+------------------------------------------------------------------+
+//| RANK 4: Fractal Dimension Market Efficiency Index (FDMEI)       |
+//+------------------------------------------------------------------+
+void CalculateFDMEI(int pos, int rates_total, const double &open[], const double &high[],
+                    const double &low[], const double &close[], const long &tick_volume[], const long &volume[])
+{
+   if(pos >= rates_total - InpFDMEI_FractalPeriod)
+   {
+      BufferMain[pos] = 1.5;
+      BufferSignal[pos] = 0;
+      BufferHistogram[pos] = 0;
+      return;
+   }
+   
+   //--- Calculate Hurst Exponent using R/S analysis
+   double hurst = CalculateHurstExponent(close, pos, InpFDMEI_FractalPeriod, rates_total);
+   
+   //--- Calculate Fractal Dimension
+   double fractal_dimension = 2.0 - hurst;
+   
+   BufferWork1[pos] = fractal_dimension;
+   
+   //--- Calculate Trend Strength
+   double ema_fast = CalculateEMA(close, pos, InpFDMEI_TrendEMAFast, rates_total);
+   double ema_slow = CalculateEMA(close, pos, InpFDMEI_TrendEMASlow, rates_total);
+   double trend_strength = ema_fast - ema_slow;
+   
+   BufferWork2[pos] = trend_strength;
+   
+   //--- Detect regime transitions
+   double fd_change = 0;
+   if(pos + 5 < rates_total)
+      fd_change = fractal_dimension - BufferWork1[pos + 5];
+   
+   BufferWork3[pos] = fd_change;
+   
+   //--- Calculate price extension from mean
+   double sma = CalculateSMA(close, pos, 50, rates_total);
+   double price_extension = close[pos] - sma;
+   
+   //--- Confidence Score
+   double confidence_score = MathAbs(fd_change) * MathAbs(price_extension) * 100.0;
+   
+   //--- Market regime classification
+   double regime_signal = 0;
+   if(fractal_dimension > InpFDMEI_MeanRevertThreshold) // Mean-reverting
+      regime_signal = 1.0;
+   else if(fractal_dimension < InpFDMEI_TrendingThreshold) // Trending
+      regime_signal = -1.0;
+   
+   BufferMain[pos] = fractal_dimension;
+   BufferSignal[pos] = regime_signal;
+   BufferHistogram[pos] = confidence_score;
+   BufferUpper[pos] = InpFDMEI_MeanRevertThreshold;
+   BufferLower[pos] = InpFDMEI_TrendingThreshold;
+}
+
+//+------------------------------------------------------------------+
+//| RANK 5: Smart Money Divergence Composite (SMDC)                 |
+//+------------------------------------------------------------------+
+void CalculateSMDC(int pos, int rates_total, const double &open[], const double &high[],
+                   const double &low[], const double &close[], const long &tick_volume[], const long &volume[])
+{
+   if(pos >= rates_total - InpSMDC_VolumeSpikePeriod - 20)
+   {
+      BufferMain[pos] = 0;
+      BufferSignal[pos] = 0;
+      BufferHistogram[pos] = 0;
+      return;
+   }
+   
+   //--- Calculate average volume
+   double avg_volume = 0;
+   for(int i = 0; i < InpSMDC_VolumeSpikePeriod && (pos + i) < rates_total; i++)
+   {
+      avg_volume += (volume[pos + i] > 0 ? volume[pos + i] : tick_volume[pos + i]);
+   }
+   avg_volume /= InpSMDC_VolumeSpikePeriod;
+   
+   //--- Component 1: Institutional Footprint
+   double current_volume = (volume[pos] > 0 ? volume[pos] : tick_volume[pos]);
+   bool large_order = current_volume > (InpSMDC_VolumeSpikeMultiplier * avg_volume);
+   
+   double price_impact = 0;
+   if(high[pos] != low[pos])
+      price_impact = MathAbs(close[pos] - open[pos]) / (high[pos] - low[pos]);
+   
+   double absorption = 0;
+   if(large_order && price_impact < InpSMDC_AbsorptionThreshold)
+      absorption = 1.0;
+   
+   BufferWork1[pos] = absorption;
+   
+   //--- Component 2: VWAP Deviation
+   double vwap = CalculateVWAP(close, volume, tick_volume, pos, 20, rates_total);
+   double atr = GetATR(pos);
+   double deviation = 0;
+   if(atr > 0)
+      deviation = (close[pos] - vwap) / atr;
+   
+   BufferWork2[pos] = deviation;
+   
+   //--- Component 3: Dark Pool Activity Proxy
+   double vol_atr_ratio = 0;
+   if(atr > 0)
+      vol_atr_ratio = current_volume / atr;
+   
+   double price_volatility = CalculateStdDev(close, pos, 10, rates_total);
+   double dark_pool_index = vol_atr_ratio * (1.0 - price_volatility);
+   
+   BufferWork3[pos] = dark_pool_index;
+   
+   //--- Composite Score
+   double smdc = (absorption * 0.4) + (deviation * 0.3) + (dark_pool_index * 0.3);
+   
+   BufferMain[pos] = smdc;
+   BufferSignal[pos] = deviation;
+   BufferHistogram[pos] = dark_pool_index * 10.0;
+   BufferUpper[pos] = InpSMDC_SignalThreshold;
+   BufferLower[pos] = -InpSMDC_SignalThreshold;
+}
+
+//+------------------------------------------------------------------+
+//| RANK 6: Volatility Clustering Mean Reversion (VCMR)             |
+//+------------------------------------------------------------------+
+void CalculateVCMR(int pos, int rates_total, const double &open[], const double &high[],
+                   const double &low[], const double &close[], const long &tick_volume[], const long &volume[])
+{
+   if(pos >= rates_total - InpVCMR_VolatilityMA - 50)
+   {
+      BufferMain[pos] = 0;
+      BufferSignal[pos] = 0;
+      BufferHistogram[pos] = 0;
+      return;
+   }
+   
+   //--- Calculate Realized Volatility (log returns)
+   double log_return = 0;
+   if(close[pos + 1] > 0)
+      log_return = MathLog(close[pos] / close[pos + 1]);
+   
+   BufferWork1[pos] = log_return;
+   
+   //--- Calculate rolling volatility
+   double realized_vol = CalculateStdDev(BufferWork1, pos, InpVCMR_VolatilityPeriod, rates_total) * MathSqrt(252) * 100.0;
+   
+   BufferWork2[pos] = realized_vol;
+   
+   //--- Calculate volatility MA
+   double vol_ma = CalculateSMA(BufferWork2, pos, InpVCMR_VolatilityMA, rates_total);
+   
+   //--- Identify volatility spikes
+   bool vol_spike = realized_vol > (vol_ma * InpVCMR_VolSpikeMult);
+   
+   //--- Count volatility clusters
+   int cluster_count = 0;
+   for(int i = 0; i < InpVCMR_ClusterWindow && (pos + i) < rates_total; i++)
+   {
+      if(BufferWork2[pos + i] > (vol_ma * InpVCMR_VolSpikeMult))
+         cluster_count++;
+   }
+   
+   BufferWork3[pos] = cluster_count;
+   
+   //--- Calculate price deviation from mean
+   double sma = CalculateSMA(close, pos, 50, rates_total);
+   double std_dev = CalculateStdDev(close, pos, 50, rates_total);
+   double price_deviation = 0;
+   if(std_dev > 0)
+      price_deviation = (close[pos] - sma) / std_dev;
+   
+   BufferWork4[pos] = price_deviation;
+   
+   //--- Volatility-adjusted deviation
+   double vol_adjusted_deviation = price_deviation;
+   if(vol_ma > 0)
+      vol_adjusted_deviation = price_deviation / (realized_vol / vol_ma);
+   
+   //--- Calculate reversion probability using logistic function
+   double base_prob = 1.0 - (1.0 / (1.0 + MathExp(-MathAbs(price_deviation))));
+   double vol_multiplier = 1.0 + (cluster_count * 0.2);
+   double reversion_probability = base_prob * vol_multiplier;
+   
+   //--- VCMR Signal
+   double vcmr_signal = reversion_probability * (price_deviation > 0 ? 1.0 : -1.0);
+   
+   BufferMain[pos] = vcmr_signal;
+   BufferSignal[pos] = price_deviation;
+   BufferHistogram[pos] = cluster_count * 0.1;
+   BufferUpper[pos] = InpVCMR_ReversionThreshold;
+   BufferLower[pos] = -InpVCMR_ReversionThreshold;
+}
+
+//+------------------------------------------------------------------+
+//| RANK 7: Orderflow Imbalance Momentum (OIM)                      |
+//+------------------------------------------------------------------+
+void CalculateOIM(int pos, int rates_total, const double &open[], const double &high[],
+                  const double &low[], const double &close[], const long &tick_volume[], const long &volume[])
+{
+   if(pos >= rates_total - InpOIM_DeltaPeriod - InpOIM_SlowEMA)
+   {
+      BufferMain[pos] = 0;
+      BufferSignal[pos] = 0;
+      BufferHistogram[pos] = 0;
+      return;
+   }
+   
+   //--- Calculate buying and selling pressure for current candle
+   double buying_pressure = 0;
+   double selling_pressure = 0;
+   double current_volume = (volume[pos] > 0 ? volume[pos] : tick_volume[pos]);
+   
+   if(high[pos] != low[pos])
+   {
+      buying_pressure = current_volume * ((close[pos] - low[pos]) / (high[pos] - low[pos]));
+      selling_pressure = current_volume * ((high[pos] - close[pos]) / (high[pos] - low[pos]));
+   }
+   
+   //--- Calculate orderflow delta
+   double orderflow_delta = buying_pressure - selling_pressure;
+   
+   BufferWork1[pos] = orderflow_delta;
+   
+   //--- Calculate cumulative delta
+   double cumulative_delta = 0;
+   double total_volume = 0;
+   for(int i = 0; i < InpOIM_DeltaPeriod && (pos + i) < rates_total; i++)
+   {
+      cumulative_delta += BufferWork1[pos + i];
+      total_volume += (volume[pos + i] > 0 ? volume[pos + i] : tick_volume[pos + i]);
+   }
+   
+   //--- Calculate imbalance ratio
+   double imbalance_ratio = 0;
+   if(total_volume > 0)
+      imbalance_ratio = cumulative_delta / total_volume;
+   
+   BufferWork2[pos] = imbalance_ratio;
+   
+   //--- Momentum component
+   double oim_fast = CalculateEMA(BufferWork2, pos, InpOIM_FastEMA, rates_total);
+   double oim_slow = CalculateEMA(BufferWork2, pos, InpOIM_SlowEMA, rates_total);
+   double oim_histogram = oim_fast - oim_slow;
+   
+   BufferWork3[pos] = oim_histogram;
+   
+   //--- Calculate acceleration
+   double acceleration = 0;
+   if(pos + InpOIM_AccelPeriod < rates_total)
+      acceleration = BufferWork3[pos] - BufferWork3[pos + InpOIM_AccelPeriod];
+   
+   BufferWork4[pos] = acceleration;
+   
+   BufferMain[pos] = oim_histogram;
+   BufferSignal[pos] = oim_fast;
+   BufferHistogram[pos] = acceleration * 100.0;
+   BufferUpper[pos] = InpOIM_ExtremeLevel;
+   BufferLower[pos] = -InpOIM_ExtremeLevel;
+}
+
+//+------------------------------------------------------------------+
+//| RANK 8: Spectral Cycle Analysis Indicator (SCAI)                |
+//+------------------------------------------------------------------+
+void CalculateSCAI(int pos, int rates_total, const double &open[], const double &high[],
+                   const double &low[], const double &close[], const long &tick_volume[], const long &volume[])
+{
+   if(pos >= rates_total - InpSCAI_FFTPeriod - 50)
+   {
+      BufferMain[pos] = 0;
+      BufferSignal[pos] = 0;
+      BufferHistogram[pos] = 0;
+      return;
+   }
+   
+   //--- Simplified cycle analysis using dominant period detection
+   //--- Calculate detrended price
+   double sma_long = CalculateSMA(close, pos, 100, rates_total);
+   double detrended_price = close[pos] - sma_long;
+   
+   BufferWork1[pos] = detrended_price;
+   
+   //--- Find dominant cycle period using autocorrelation
+   int dominant_period = 20; // Default
+   double max_correlation = 0;
+   
+   for(int period = 10; period <= 50 && (pos + period) < rates_total; period++)
+   {
+      double correlation = CalculateAutocorrelation(BufferWork1, pos, period, 50, rates_total);
+      if(correlation > max_correlation)
+      {
+         max_correlation = correlation;
+         dominant_period = period;
+      }
+   }
+   
+   BufferWork2[pos] = dominant_period;
+   
+   //--- Calculate cycle phase (simplified)
+   double cycle_value = 0;
+   for(int i = 0; i < dominant_period && (pos + i) < rates_total; i++)
+   {
+      double angle = 2.0 * M_PI * i / dominant_period;
+      cycle_value += BufferWork1[pos + i] * MathSin(angle);
+   }
+   
+   double phase = MathArctan2(cycle_value, dominant_period / 2.0) * 180.0 / M_PI;
+   if(phase < 0)
+      phase += 360.0;
+   
+   BufferWork3[pos] = phase;
+   
+   //--- Calculate synthetic price using dominant cycle
+   double synthetic_price = 0;
+   for(int i = 0; i < dominant_period && (pos + i) < rates_total; i++)
+   {
+      double angle = 2.0 * M_PI * i / dominant_period;
+      synthetic_price += BufferWork1[pos + i] * MathSin(angle);
+   }
+   synthetic_price = synthetic_price / dominant_period + sma_long;
+   
+   BufferWork4[pos] = synthetic_price;
+   
+   //--- Calculate deviation from synthetic
+   double deviation = close[pos] - synthetic_price;
+   
+   BufferMain[pos] = phase;
+   BufferSignal[pos] = deviation * 100.0;
+   BufferHistogram[pos] = dominant_period;
+   BufferUpper[pos] = InpSCAI_PhaseTopDegrees;
+   BufferLower[pos] = InpSCAI_PhaseBottomDegrees;
+}
+
+//+------------------------------------------------------------------+
+//| RANK 9: Momentum Exhaustion Gradient (MEG)                      |
+//+------------------------------------------------------------------+
+void CalculateMEG(int pos, int rates_total, const double &open[], const double &high[],
+                  const double &low[], const double &close[], const long &tick_volume[], const long &volume[])
+{
+   if(pos >= rates_total - 150)
+   {
+      BufferMain[pos] = 0;
+      BufferSignal[pos] = 0;
+      BufferHistogram[pos] = 0;
+      return;
+   }
+   
+   //--- Calculate momentum for multiple timeframes
+   int periods[5];
+   periods[0] = InpMEG_Period1;
+   periods[1] = InpMEG_Period2;
+   periods[2] = InpMEG_Period3;
+   periods[3] = InpMEG_Period4;
+   periods[4] = InpMEG_Period5;
+   double normalized_momentums[5];
+   double gradients[4];
+   
+   for(int p = 0; p < 5; p++)
+   {
+      if(pos + periods[p] >= rates_total)
+      {
+         normalized_momentums[p] = 0;
+         continue;
+      }
+      
+      //--- Calculate momentum
+      double momentum = 0;
+      if(close[pos + periods[p]] != 0)
+         momentum = (close[pos] - close[pos + periods[p]]) / close[pos + periods[p]] * 100.0;
+      
+      //--- Normalize momentum
+      double momentum_std = 0;
+      double momentum_sum = 0;
+      int count = 0;
+      for(int i = 0; i < 50 && (pos + i + periods[p]) < rates_total; i++)
+      {
+         if(close[pos + i + periods[p]] != 0)
+         {
+            double temp_mom = (close[pos + i] - close[pos + i + periods[p]]) / close[pos + i + periods[p]] * 100.0;
+            momentum_sum += temp_mom;
+            count++;
+         }
+      }
+      double momentum_mean = (count > 0) ? momentum_sum / count : 0;
+      
+      double variance = 0;
+      for(int i = 0; i < 50 && (pos + i + periods[p]) < rates_total; i++)
+      {
+         if(close[pos + i + periods[p]] != 0)
+         {
+            double temp_mom = (close[pos + i] - close[pos + i + periods[p]]) / close[pos + i + periods[p]] * 100.0;
+            variance += MathPow(temp_mom - momentum_mean, 2);
+         }
+      }
+      momentum_std = (count > 1) ? MathSqrt(variance / (count - 1)) : 1.0;
+      
+      if(momentum_std > 0)
+         normalized_momentums[p] = (momentum - momentum_mean) / momentum_std;
+      else
+         normalized_momentums[p] = 0;
+   }
+   
+   //--- Calculate gradients between adjacent timeframes
+   for(int i = 0; i < 4; i++)
+   {
+      gradients[i] = normalized_momentums[i] - normalized_momentums[i + 1];
+   }
+   
+   //--- Calculate average gradient
+   double avg_gradient = 0;
+   for(int i = 0; i < 4; i++)
+      avg_gradient += gradients[i];
+   avg_gradient /= 4.0;
+   
+   //--- Calculate gradient consistency (std dev)
+   double gradient_variance = 0;
+   for(int i = 0; i < 4; i++)
+      gradient_variance += MathPow(gradients[i] - avg_gradient, 2);
+   double gradient_consistency = MathSqrt(gradient_variance / 4.0);
+   
+   //--- Calculate momentum strength
+   double momentum_strength = 0;
+   for(int i = 0; i < 5; i++)
+      momentum_strength += MathAbs(normalized_momentums[i]);
+   momentum_strength /= 5.0;
+   
+   //--- Calculate gradient divergence
+   double gradient_divergence = 0;
+   if(gradient_consistency > 0)
+      gradient_divergence = avg_gradient / gradient_consistency;
+   
+   //--- MEG Score
+   double meg_score = momentum_strength * (1.0 - gradient_divergence);
+   
+   BufferMain[pos] = meg_score;
+   BufferSignal[pos] = avg_gradient * 10.0;
+   BufferHistogram[pos] = gradient_divergence;
+   BufferUpper[pos] = InpMEG_ExhaustionThreshold;
+   BufferLower[pos] = -InpMEG_ExhaustionThreshold;
+}
+
+//+------------------------------------------------------------------+
+//| RANK 10: Implied Volatility Skew Reversal (IVSR)                |
+//+------------------------------------------------------------------+
+void CalculateIVSR(int pos, int rates_total, const double &open[], const double &high[],
+                   const double &low[], const double &close[], const long &tick_volume[], const long &volume[])
+{
+   if(pos >= rates_total - InpIVSR_HistoricalPeriod)
+   {
+      BufferMain[pos] = 0;
+      BufferSignal[pos] = 0;
+      BufferHistogram[pos] = 0;
+      return;
+   }
+   
+   //--- Calculate upper and lower volatility (using wicks)
+   double upper_wick = high[pos] - MathMax(open[pos], close[pos]);
+   double lower_wick = MathMin(open[pos], close[pos]) - low[pos];
+   
+   BufferWork1[pos] = upper_wick;
+   BufferWork2[pos] = lower_wick;
+   
+   //--- Calculate ATR for upper and lower wicks
+   double upper_vol = 0;
+   double lower_vol = 0;
+   
+   for(int i = 0; i < InpIVSR_ATRPeriod && (pos + i) < rates_total; i++)
+   {
+      upper_vol += BufferWork1[pos + i];
+      lower_vol += BufferWork2[pos + i];
+   }
+   upper_vol /= InpIVSR_ATRPeriod;
+   lower_vol /= InpIVSR_ATRPeriod;
+   
+   //--- Calculate skew ratio
+   double skew_ratio = 1.0;
+   if(upper_vol > 0)
+      skew_ratio = lower_vol / upper_vol;
+   
+   BufferWork3[pos] = skew_ratio;
+   
+   //--- Calculate skew change (momentum)
+   double skew_change = 0;
+   if(pos + InpIVSR_SkewChangePeriod < rates_total)
+      skew_change = (BufferWork3[pos] - BufferWork3[pos + InpIVSR_SkewChangePeriod]) / InpIVSR_SkewChangePeriod;
+   
+   BufferWork4[pos] = skew_change;
+   
+   //--- Calculate skew acceleration
+   double skew_acceleration = 0;
+   if(pos + InpIVSR_AccelerationPeriod < rates_total)
+      skew_acceleration = (BufferWork4[pos] - BufferWork4[pos + InpIVSR_AccelerationPeriod]) / InpIVSR_AccelerationPeriod;
+   
+   BufferWork5[pos] = skew_acceleration;
+   
+   //--- Calculate historical skew statistics
+   double historical_skew_mean = 0;
+   double historical_skew_std = 0;
+   
+   for(int i = 0; i < InpIVSR_HistoricalPeriod && (pos + i) < rates_total; i++)
+   {
+      historical_skew_mean += BufferWork3[pos + i];
+   }
+   historical_skew_mean /= InpIVSR_HistoricalPeriod;
+   
+   double variance = 0;
+   for(int i = 0; i < InpIVSR_HistoricalPeriod && (pos + i) < rates_total; i++)
+   {
+      variance += MathPow(BufferWork3[pos + i] - historical_skew_mean, 2);
+   }
+   historical_skew_std = MathSqrt(variance / InpIVSR_HistoricalPeriod);
+   
+   //--- Calculate Z-Score
+   double z_score = 0;
+   if(historical_skew_std > 0)
+      z_score = (skew_ratio - historical_skew_mean) / historical_skew_std;
+   
+   BufferWork6[pos] = z_score;
+   
+   //--- IVSR Signal
+   double ivsr_signal = z_score * skew_acceleration * -1.0;
+   
+   BufferMain[pos] = z_score;
+   BufferSignal[pos] = skew_acceleration * 100.0;
+   BufferHistogram[pos] = ivsr_signal;
+   BufferUpper[pos] = InpIVSR_ZScoreThreshold;
+   BufferLower[pos] = -InpIVSR_ZScoreThreshold;
+}
+
+//+------------------------------------------------------------------+
+//| Detect and mark buy/sell signals                                |
+//+------------------------------------------------------------------+
+void DetectSignals(int pos, int rates_total, const datetime &time[], const double &close[])
+{
+   if(pos >= rates_total - InpLongPeriod - 100 || pos < 5)
+      return;
+   
+   bool buy_signal = false;
+   bool sell_signal = false;
+   
+   //--- Detect signals based on selected indicator
+   switch(InpIndicatorType)
+   {
+      case INDICATOR_CVDPI:
+         // Bottom: Volume Pressure < -80, Acceleration > 0, Bullish divergence
+         if(BufferMain[pos] < InpCVDPI_ExtremeSell && 
+            BufferWork4[pos] > 0 && 
+            BufferWork4[pos + 1] <= 0 &&
+            close[pos] < close[pos + 5] && 
+            BufferWork5[pos] > BufferWork5[pos + 5])
+            buy_signal = true;
+         
+         // Top: Volume Pressure > 80, Acceleration < 0, Bearish divergence
+         if(BufferMain[pos] > InpCVDPI_ExtremeBuy && 
+            BufferWork4[pos] < 0 && 
+            BufferWork4[pos + 1] >= 0 &&
+            close[pos] > close[pos + 5] && 
+            BufferWork5[pos] < BufferWork5[pos + 5])
+            sell_signal = true;
+         break;
+         
+      case INDICATOR_LVZ:
+         // Approaching vacuum from above with decreasing velocity
+         if(BufferMain[pos] < -25 && 
+            BufferSignal[pos] >= InpLVZ_MinConfluence * 10.0 &&
+            BufferWork3[pos] < BufferWork3[pos + 3])
+            buy_signal = true;
+         
+         // Approaching vacuum from below with decreasing velocity
+         if(BufferMain[pos] > 25 && 
+            BufferSignal[pos] >= InpLVZ_MinConfluence * 10.0 &&
+            BufferWork3[pos] < BufferWork3[pos + 3])
+            sell_signal = true;
+         break;
+         
+      case INDICATOR_ARSM:
+         // Bottom: Momentum < -3σ, Acceleration turns positive
+         if(BufferMain[pos] < -InpARSM_ExhaustionSigma && 
+            BufferWork4[pos] > 0 && 
+            BufferWork4[pos + 1] <= 0)
+            buy_signal = true;
+         
+         // Top: Momentum > +3σ, Acceleration turns negative
+         if(BufferMain[pos] > InpARSM_ExhaustionSigma && 
+            BufferWork4[pos] < 0 && 
+            BufferWork4[pos + 1] >= 0)
+            sell_signal = true;
+         break;
+         
+      case INDICATOR_FDMEI:
+         // Transition from trending to mean-reverting with negative trend
+         if(BufferWork1[pos + 5] < InpFDMEI_TrendingThreshold && 
+            BufferMain[pos] > InpFDMEI_MeanRevertThreshold && 
+            BufferWork2[pos] < 0 &&
+            BufferHistogram[pos] > 10)
+            buy_signal = true;
+         
+         // Transition from trending to mean-reverting with positive trend
+         if(BufferWork1[pos + 5] < InpFDMEI_TrendingThreshold && 
+            BufferMain[pos] > InpFDMEI_MeanRevertThreshold && 
+            BufferWork2[pos] > 0 &&
+            BufferHistogram[pos] > 10)
+            sell_signal = true;
+         break;
+         
+      case INDICATOR_SMDC:
+         // Smart money accumulating (high SMDC while price making lower lows)
+         if(BufferMain[pos] > InpSMDC_SignalThreshold && 
+            close[pos] < close[pos + 5] &&
+            BufferWork1[pos] > 0.5)
+            buy_signal = true;
+         
+         // Smart money distributing (low SMDC while price making higher highs)
+         if(BufferMain[pos] < -InpSMDC_SignalThreshold && 
+            close[pos] > close[pos + 5] &&
+            BufferWork1[pos] > 0.5)
+            sell_signal = true;
+         break;
+         
+      case INDICATOR_VCMR:
+         // High reversion probability with clustering
+         if(BufferMain[pos] < -InpVCMR_ReversionThreshold && 
+            BufferWork3[pos] >= 3 &&
+            BufferWork4[pos] < -2)
+            buy_signal = true;
+         
+         if(BufferMain[pos] > InpVCMR_ReversionThreshold && 
+            BufferWork3[pos] >= 3 &&
+            BufferWork4[pos] > 2)
+            sell_signal = true;
+         break;
+         
+      case INDICATOR_OIM:
+         // Extreme selling with positive acceleration
+         if(BufferMain[pos] < -InpOIM_ExtremeLevel && 
+            BufferWork4[pos] > 0 &&
+            close[pos] < close[pos + 3] &&
+            BufferWork2[pos] > BufferWork2[pos + 3])
+            buy_signal = true;
+         
+         // Extreme buying with negative acceleration
+         if(BufferMain[pos] > InpOIM_ExtremeLevel && 
+            BufferWork4[pos] < 0 &&
+            close[pos] > close[pos + 3] &&
+            BufferWork2[pos] < BufferWork2[pos + 3])
+            sell_signal = true;
+         break;
+         
+      case INDICATOR_SCAI:
+         // Phase near 270° (trough) and price below synthetic
+         if(MathAbs(BufferMain[pos] - InpSCAI_PhaseBottomDegrees) < 30 && 
+            close[pos] < BufferWork4[pos])
+            buy_signal = true;
+         
+         // Phase near 90° (peak) and price above synthetic
+         if(MathAbs(BufferMain[pos] - InpSCAI_PhaseTopDegrees) < 30 && 
+            close[pos] > BufferWork4[pos])
+            sell_signal = true;
+         break;
+         
+      case INDICATOR_MEG:
+         // Momentum exhaustion with divergence
+         if(BufferMain[pos] < -InpMEG_ExhaustionThreshold && 
+            BufferHistogram[pos] > InpMEG_DivergenceThreshold &&
+            BufferSignal[pos] > 0)
+            buy_signal = true;
+         
+         if(BufferMain[pos] > InpMEG_ExhaustionThreshold && 
+            BufferHistogram[pos] > InpMEG_DivergenceThreshold &&
+            BufferSignal[pos] < 0)
+            sell_signal = true;
+         break;
+         
+      case INDICATOR_IVSR:
+         // Extreme downside volatility with normalizing skew
+         if(BufferWork6[pos] < -InpIVSR_ZScoreThreshold && 
+            BufferWork5[pos] > 0 &&
+            BufferWork5[pos + 1] <= 0)
+            buy_signal = true;
+         
+         // Extreme upside volatility with normalizing skew
+         if(BufferWork6[pos] > InpIVSR_ZScoreThreshold && 
+            BufferWork5[pos] < 0 &&
+            BufferWork5[pos + 1] >= 0)
+            sell_signal = true;
+         break;
+   }
+   
+   //--- Mark signals on chart
+   if(buy_signal && InpShowBuySignals)
+   {
+      BufferBuySignal[pos] = BufferMain[pos] - 5;
+      
+      if(InpShowAlerts && pos == 0 && time[0] != g_last_alert_time)
+      {
+         string message = StringFormat("%s: BUY Signal on %s %s", 
+                                      g_indicator_name, _Symbol, EnumToString(_Period));
+         Alert(message);
+         if(InpSendNotifications)
+            SendNotification(message);
+         g_last_alert_time = time[0];
+      }
+   }
+   
+   if(sell_signal && InpShowSellSignals)
+   {
+      BufferSellSignal[pos] = BufferMain[pos] + 5;
+      
+      if(InpShowAlerts && pos == 0 && time[0] != g_last_alert_time)
+      {
+         string message = StringFormat("%s: SELL Signal on %s %s", 
+                                      g_indicator_name, _Symbol, EnumToString(_Period));
+         Alert(message);
+         if(InpSendNotifications)
+            SendNotification(message);
+         g_last_alert_time = time[0];
+      }
+   }
+}
+
+//+------------------------------------------------------------------+
+//| Helper: Get ATR value                                           |
+//+------------------------------------------------------------------+
+double GetATR(int shift)
+{
+   double atr_buffer[];
+   ArraySetAsSeries(atr_buffer, true);
+   
+   if(CopyBuffer(g_atr_handle, 0, shift, 1, atr_buffer) <= 0)
+      return 0;
+   
+   return atr_buffer[0];
+}
+
+//+------------------------------------------------------------------+
+//| Helper: Calculate Simple Moving Average                         |
+//+------------------------------------------------------------------+
+double CalculateSMA(const double &array[], int pos, int period, int rates_total)
+{
+   if(pos + period >= rates_total)
+      return 0;
+   
+   double sum = 0;
+   for(int i = 0; i < period; i++)
+      sum += array[pos + i];
+   
+   return sum / period;
+}
+
+//+------------------------------------------------------------------+
+//| Helper: Calculate Exponential Moving Average                    |
+//+------------------------------------------------------------------+
+double CalculateEMA(const double &array[], int pos, int period, int rates_total)
+{
+   if(pos + period >= rates_total)
+      return array[pos];
+   
+   double alpha = 2.0 / (period + 1.0);
+   double ema = array[pos + period - 1];
+   
+   for(int i = pos + period - 2; i >= pos; i--)
+   {
+      ema = alpha * array[i] + (1.0 - alpha) * ema;
+   }
+   
+   return ema;
+}
+
+//+------------------------------------------------------------------+
+//| Helper: Calculate Standard Deviation                            |
+//+------------------------------------------------------------------+
+double CalculateStdDev(const double &array[], int pos, int period, int rates_total)
+{
+   if(pos + period >= rates_total)
+      return 0;
+   
+   double mean = CalculateSMA(array, pos, period, rates_total);
+   double sum = 0;
+   
+   for(int i = 0; i < period; i++)
+      sum += MathPow(array[pos + i] - mean, 2);
+   
+   return MathSqrt(sum / period);
+}
+
+//+------------------------------------------------------------------+
+//| Helper: Calculate VWAP                                          |
+//+------------------------------------------------------------------+
+double CalculateVWAP(const double &price[], const long &volume[], const long &tick_volume[], 
+                     int pos, int period, int rates_total)
+{
+   if(pos + period >= rates_total)
+      return price[pos];
+   
+   double sum_pv = 0;
+   double sum_v = 0;
+   
+   for(int i = 0; i < period; i++)
+   {
+      double vol = (volume[pos + i] > 0) ? volume[pos + i] : tick_volume[pos + i];
+      sum_pv += price[pos + i] * vol;
+      sum_v += vol;
+   }
+   
+   return (sum_v > 0) ? sum_pv / sum_v : price[pos];
+}
+
+//+------------------------------------------------------------------+
+//| Helper: Calculate Hurst Exponent                                |
+//+------------------------------------------------------------------+
+double CalculateHurstExponent(const double &price[], int pos, int period, int rates_total)
+{
+   if(pos + period >= rates_total)
+      return 0.5;
+   
+   //--- Calculate mean
+   double mean = 0;
+   for(int i = 0; i < period; i++)
+      mean += price[pos + i];
+   mean /= period;
+   
+   //--- Calculate cumulative deviation
+   double cumulative_deviation[];
+   ArrayResize(cumulative_deviation, period);
+   cumulative_deviation[0] = price[pos] - mean;
+   
+   for(int i = 1; i < period; i++)
+      cumulative_deviation[i] = cumulative_deviation[i-1] + (price[pos + i] - mean);
+   
+   //--- Calculate range
+   double max_cumulative = cumulative_deviation[0];
+   double min_cumulative = cumulative_deviation[0];
+   
+   for(int i = 1; i < period; i++)
+   {
+      if(cumulative_deviation[i] > max_cumulative)
+         max_cumulative = cumulative_deviation[i];
+      if(cumulative_deviation[i] < min_cumulative)
+         min_cumulative = cumulative_deviation[i];
+   }
+   
+   double range = max_cumulative - min_cumulative;
+   
+   //--- Calculate standard deviation
+   double std_dev = CalculateStdDev(price, pos, period, rates_total);
+   
+   //--- Calculate R/S ratio
+   double rs = (std_dev > 0) ? range / std_dev : 1.0;
+   
+   //--- Calculate Hurst exponent
+   double hurst = 0.5;
+   if(rs > 0 && period > 1)
+      hurst = MathLog(rs) / MathLog(period);
+   
+   //--- Ensure Hurst is in valid range [0, 1]
+   if(hurst < 0)
+      hurst = 0;
+   if(hurst > 1)
+      hurst = 1;
+   
+   return hurst;
+}
+
+//+------------------------------------------------------------------+
+//| Helper: Calculate Autocorrelation                               |
+//+------------------------------------------------------------------+
+double CalculateAutocorrelation(const double &array[], int pos, int lag, int window, int rates_total)
+{
+   if(pos + window + lag >= rates_total)
+      return 0;
+   
+   double mean = 0;
+   for(int i = 0; i < window; i++)
+      mean += array[pos + i];
+   mean /= window;
+   
+   double numerator = 0;
+   double denominator = 0;
+   
+   for(int i = 0; i < window - lag; i++)
+   {
+      numerator += (array[pos + i] - mean) * (array[pos + i + lag] - mean);
+   }
+   
+   for(int i = 0; i < window; i++)
+   {
+      denominator += MathPow(array[pos + i] - mean, 2);
+   }
+   
+   return (denominator > 0) ? numerator / denominator : 0;
+}
