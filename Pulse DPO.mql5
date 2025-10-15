@@ -1,0 +1,290 @@
+//+------------------------------------------------------------------+
+//|                                                    Pulse_DPO.mq5 |
+//|                          This Source Code Form is subject to the|
+//|                   terms of the Mozilla Public License, v. 2.0.  |
+//|              If a copy of the MPL was not distributed with this |
+//|         file, You can obtain one at https://mozilla.org/MPL/2.0/|
+//|                                                  © gliderfund    |
+//+------------------------------------------------------------------+
+#property copyright "Hamoon Algo Ltd"
+#property link      "https://mozilla.org/MPL/2.0/"
+#property version   "1.00"
+#property description "Pulse DPO: Major Cycle Tops and Bottoms"
+#property indicator_separate_window
+#property indicator_buffers 5
+#property indicator_plots   3
+
+#property indicator_label1  "Pulse DPO"
+#property indicator_type1   DRAW_COLOR_LINE
+#property indicator_color1  clrGray,clrLime,clrRed
+#property indicator_style1  STYLE_SOLID
+#property indicator_width1  2
+
+#property indicator_label2  "Buy Signal"
+#property indicator_type2   DRAW_ARROW
+#property indicator_color2  clrLime
+#property indicator_style2  STYLE_SOLID
+#property indicator_width2  3
+
+#property indicator_label3  "Sell Signal"
+#property indicator_type3   DRAW_ARROW
+#property indicator_color3  clrRed
+#property indicator_style3  STYLE_SOLID
+#property indicator_width3  3
+
+#property indicator_level1 95.0
+#property indicator_level2 5.0
+#property indicator_levelcolor clrMagenta
+#property indicator_levelstyle STYLE_DOT
+
+//--- Input parameters
+input int    InpLength          = 548;              // Oscillator Length
+input int    InpOffset          = 274;              // Offset
+input int    InpLookback        = 1096;             // Lookback Period
+input ENUM_APPLIED_PRICE InpPrice = PRICE_CLOSE;    // Price Source
+input int    InpLengthSmooth    = 3;                // Smoothing Length
+input double InpThresholdTop    = 95.0;             // Top Threshold
+input double InpThresholdBottom = 5.0;              // Bottom Threshold
+input bool   InpShowAlerts      = true;             // Show Alerts
+
+//--- Indicator buffers
+double OscBuffer[];
+double OscColorBuffer[];
+double BuySignalBuffer[];
+double SellSignalBuffer[];
+double OscBaseBuffer[];
+
+//--- Global variables
+datetime lastAlertTime = 0;
+
+//+------------------------------------------------------------------+
+//| Custom indicator initialization function                         |
+//+------------------------------------------------------------------+
+int OnInit()
+{
+   //--- Validate inputs
+   if(InpLength < 1 || InpOffset < 1 || InpLookback < 1 || InpLengthSmooth < 1)
+   {
+      Print("Error: All length parameters must be greater than 0");
+      return(INIT_PARAMETERS_INCORRECT);
+   }
+   
+   if(InpThresholdTop <= InpThresholdBottom)
+   {
+      Print("Error: Top threshold must be greater than bottom threshold");
+      return(INIT_PARAMETERS_INCORRECT);
+   }
+   
+   //--- Indicator buffers mapping
+   SetIndexBuffer(0, OscBuffer, INDICATOR_DATA);
+   SetIndexBuffer(1, OscColorBuffer, INDICATOR_COLOR_INDEX);
+   SetIndexBuffer(2, BuySignalBuffer, INDICATOR_DATA);
+   SetIndexBuffer(3, SellSignalBuffer, INDICATOR_DATA);
+   SetIndexBuffer(4, OscBaseBuffer, INDICATOR_CALCULATIONS);
+   
+   //--- Set arrow codes
+   PlotIndexSetInteger(1, PLOT_ARROW, 233); // Up arrow for buy
+   PlotIndexSetInteger(2, PLOT_ARROW, 234); // Down arrow for sell
+   
+   //--- Set empty values
+   PlotIndexSetDouble(0, PLOT_EMPTY_VALUE, EMPTY_VALUE);
+   PlotIndexSetDouble(1, PLOT_EMPTY_VALUE, EMPTY_VALUE);
+   PlotIndexSetDouble(2, PLOT_EMPTY_VALUE, EMPTY_VALUE);
+   
+   //--- Set indicator name
+   IndicatorSetString(INDICATOR_SHORTNAME, "Pulse DPO");
+   IndicatorSetInteger(INDICATOR_DIGITS, 2);
+   
+   return(INIT_SUCCEEDED);
+}
+
+//+------------------------------------------------------------------+
+//| Custom indicator iteration function                              |
+//+------------------------------------------------------------------+
+int OnCalculate(const int rates_total,
+                const int prev_calculated,
+                const datetime &time[],
+                const double &open[],
+                const double &high[],
+                const double &low[],
+                const double &close[],
+                const long &tick_volume[],
+                const long &volume[],
+                const int &spread[])
+{
+   //--- Check for minimum bars
+   int minBars = MathMax(InpLength + InpOffset, InpLookback) + InpLengthSmooth;
+   if(rates_total < minBars)
+      return(0);
+   
+   //--- Determine starting position
+   int start = prev_calculated - 1;
+   if(start < minBars - 1)
+      start = minBars - 1;
+   
+   //--- Main calculation loop
+   for(int i = start; i < rates_total; i++)
+   {
+      //--- Get price source
+      double price = GetPrice(InpPrice, i, open, high, low, close);
+      
+      //--- Calculate parameters based on available bars
+      int bars_available = i + 1;
+      int oscLength = MathMin(InpLength, bars_available);
+      int oscOffset = MathMin(InpOffset, i);
+      int oscLookback = MathMin(InpLookback, bars_available);
+      int oscLengthSmooth = MathMin(InpLengthSmooth, bars_available);
+      
+      //--- Calculate moving average at offset position
+      double ma_value = 0.0;
+      int ma_start = i - oscOffset;
+      
+      if(ma_start >= oscLength - 1)
+      {
+         double sum = 0.0;
+         for(int j = 0; j < oscLength; j++)
+         {
+            int ma_pos = ma_start - j;
+            if(ma_pos >= 0 && ma_pos < rates_total)
+               sum += GetPrice(InpPrice, ma_pos, open, high, low, close);
+         }
+         ma_value = sum / oscLength;
+      }
+      
+      //--- Calculate base oscillator (DPO formula)
+      OscBaseBuffer[i] = price - ma_value;
+      
+      //--- Find max and min over lookback period
+      double maxOsc = -DBL_MAX;
+      double minOsc = DBL_MAX;
+      
+      int lookback_start = MathMax(0, i - oscLookback + 1);
+      for(int j = lookback_start; j <= i; j++)
+      {
+         double val = OscBaseBuffer[j];
+         if(val > maxOsc) maxOsc = val;
+         if(val < minOsc) minOsc = val;
+      }
+      
+      //--- Normalize oscillator to 0-100 range
+      double oscNormalized = 0.0;
+      if(maxOsc != minOsc)
+         oscNormalized = (OscBaseBuffer[i] - minOsc) / (maxOsc - minOsc) * 100.0;
+      else
+         oscNormalized = 50.0;
+      
+      //--- Smooth normalized oscillator (simple moving average)
+      double smoothSum = 0.0;
+      int smooth_count = 0;
+      for(int j = 0; j < oscLengthSmooth; j++)
+      {
+         int smooth_pos = i - j;
+         if(smooth_pos >= 0 && smooth_pos < rates_total && OscBaseBuffer[smooth_pos] != EMPTY_VALUE)
+         {
+            // Recalculate normalized value for each position in smoothing window
+            double tempNorm = 0.0;
+            if(maxOsc != minOsc)
+               tempNorm = (OscBaseBuffer[smooth_pos] - minOsc) / (maxOsc - minOsc) * 100.0;
+            else
+               tempNorm = 50.0;
+            
+            smoothSum += tempNorm;
+            smooth_count++;
+         }
+      }
+      
+      OscBuffer[i] = (smooth_count > 0) ? smoothSum / smooth_count : 0.0;
+      
+      //--- Set oscillator color
+      if(OscBuffer[i] >= InpThresholdTop)
+         OscColorBuffer[i] = 2; // Red
+      else if(OscBuffer[i] <= InpThresholdBottom)
+         OscColorBuffer[i] = 1; // Green
+      else
+         OscColorBuffer[i] = 0; // Gray
+      
+      //--- Initialize signal buffers
+      BuySignalBuffer[i] = EMPTY_VALUE;
+      SellSignalBuffer[i] = EMPTY_VALUE;
+      
+      //--- Detect signals (only on new bars)
+      if(i > 0 && i == rates_total - 1)
+      {
+         double curr_osc = OscBuffer[i];
+         double prev_osc = OscBuffer[i - 1];
+         
+         //--- Buy signal: crossing above bottom threshold (exiting oversold)
+         if(prev_osc <= InpThresholdBottom && curr_osc > InpThresholdBottom)
+         {
+            BuySignalBuffer[i] = InpThresholdBottom - 2;
+            
+            if(InpShowAlerts && time[i] != lastAlertTime)
+            {
+               Alert("Pulse DPO: EXITING OVERSOLD - Potential BUY signal at ", 
+                     Symbol(), " ", EnumToString((ENUM_TIMEFRAMES)Period()), 
+                     " - Time: ", TimeToString(time[i], TIME_DATE|TIME_MINUTES));
+               lastAlertTime = time[i];
+            }
+         }
+         
+         //--- Sell signal: crossing below top threshold (exiting overbought)
+         if(prev_osc >= InpThresholdTop && curr_osc < InpThresholdTop)
+         {
+            SellSignalBuffer[i] = InpThresholdTop + 2;
+            
+            if(InpShowAlerts && time[i] != lastAlertTime)
+            {
+               Alert("Pulse DPO: EXITING OVERBOUGHT - Potential SELL signal at ", 
+                     Symbol(), " ", EnumToString((ENUM_TIMEFRAMES)Period()), 
+                     " - Time: ", TimeToString(time[i], TIME_DATE|TIME_MINUTES));
+               lastAlertTime = time[i];
+            }
+         }
+         
+         //--- Additional alerts for entering zones
+         if(prev_osc < InpThresholdTop && curr_osc >= InpThresholdTop)
+         {
+            if(InpShowAlerts && time[i] != lastAlertTime)
+            {
+               Alert("Pulse DPO: ENTERING OVERBOUGHT - Major players may start selling at ", 
+                     Symbol(), " ", EnumToString((ENUM_TIMEFRAMES)Period()));
+               lastAlertTime = time[i];
+            }
+         }
+         
+         if(prev_osc > InpThresholdBottom && curr_osc <= InpThresholdBottom)
+         {
+            if(InpShowAlerts && time[i] != lastAlertTime)
+            {
+               Alert("Pulse DPO: ENTERING OVERSOLD - Major players may start buying at ", 
+                     Symbol(), " ", EnumToString((ENUM_TIMEFRAMES)Period()));
+               lastAlertTime = time[i];
+            }
+         }
+      }
+   }
+   
+   //--- Return value of prev_calculated for next call
+   return(rates_total);
+}
+
+//+------------------------------------------------------------------+
+//| Get price value based on applied price                           |
+//+------------------------------------------------------------------+
+double GetPrice(ENUM_APPLIED_PRICE price_type, int shift,
+                const double &open[], const double &high[],
+                const double &low[], const double &close[])
+{
+   switch(price_type)
+   {
+      case PRICE_OPEN:     return open[shift];
+      case PRICE_HIGH:     return high[shift];
+      case PRICE_LOW:      return low[shift];
+      case PRICE_CLOSE:    return close[shift];
+      case PRICE_MEDIAN:   return (high[shift] + low[shift]) / 2.0;
+      case PRICE_TYPICAL:  return (high[shift] + low[shift] + close[shift]) / 3.0;
+      case PRICE_WEIGHTED: return (high[shift] + low[shift] + close[shift] + close[shift]) / 4.0;
+      default: return close[shift];
+   }
+}
+//+------------------------------------------------------------------+
