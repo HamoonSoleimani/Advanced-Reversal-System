@@ -1,0 +1,1823 @@
+//+------------------------------------------------------------------+
+//|                                    ReversalPointDynamics.mq5     |
+//|                           Reversal Point Dynamics - Full Version |
+//|                                                                  |
+//+------------------------------------------------------------------+
+#property copyright "Hamoon Algo Ltd"
+#property link      ""
+#property version   "1.00"
+#property indicator_chart_window
+#property indicator_buffers 20
+#property indicator_plots   8
+
+//--- Input parameters - CORE ALGORITHM
+input group "🧠 Core Algorithm"
+input int InpAdaptivePeriod = 25;                    // Adaptive Analysis Period
+input int InpFractalStrength = 2;                    // Fractal Strength (Bars)
+input int InpMtfMultiplier = 4;                      // MTF Multiplier
+
+//--- Input parameters - SIGNAL SETTINGS
+input group "🎯 Signal Settings"
+input int InpMinProbThreshold = 65;                  // Min Probability %
+input int InpMinSignalDistance = 10;                 // Min Signal Distance (Bars)
+input double InpEntropyThreshold = 0.85;             // Entropy Threshold
+input bool InpAdaptiveEntropy = true;                // Adaptive Entropy (Auto-Adjust)
+input bool InpAggressiveMode = false;                // Aggressive Mode (Catch All)
+
+//--- Input parameters - STATE ANALYSIS
+input group "📊 State Analysis"
+input int InpAnalysisLevels = 6;                     // Analysis Levels
+input int InpEdgeSensitivity = 3;                    // Edge Sensitivity
+input bool InpPredictiveMode = true;                 // Predictive Mode (Early Detection)
+input bool InpLiveSignalMode = false;                // Live Signal Mode (Current Bar)
+
+//--- Input parameters - ADDITIONAL FILTERS
+input group "📈 Additional Filters"
+input bool InpEnableRSI = true;                      // Enable RSI Filter
+input int InpRsiLen = 17;                            // RSI Length
+input int InpRsiTop = 65;                            // Overbought Threshold
+input int InpRsiBot = 40;                            // Oversold Threshold
+input int InpVolLookback = 17;                       // Volume Lookback
+input double InpVolMultiplier = 1.2;                 // Volume Multiplier
+
+//--- Input parameters - VISUAL DESIGN
+input group "🌈 Visual Design"
+input int InpSignalSize = 1;                         // Signal Size (0=Tiny,1=Small,2=Normal,3=Large)
+input bool InpShowHarmonicWave = true;               // Show Harmonic Wave
+input bool InpShowEntropyParticles = true;           // Show Entropy Particles
+input int InpColorTheme = 3;                         // Color Theme (0=Neon,1=Cyber,2=Solar,3=Ocean,4=Aurora,5=Plasma)
+
+//--- Input parameters - FIBONACCI
+input group "🔮 Fibonacci Target Engine"
+input bool InpShowFibLevels = true;                  // Show Fibonacci Levels
+input bool InpShowActiveChannel = true;              // Show Active Fib Channel
+input color InpC_F8 = clrDodgerBlue;                 // F8 Color
+input color InpC_F13 = clrMediumPurple;              // F13 Color
+input color InpC_F21 = clrOrange;                    // F21 Color
+input color InpC_F34 = clrLimeGreen;                 // F34 Color
+input color InpC_F55 = clrCrimson;                   // F55 Color
+
+//--- Input parameters - DASHBOARD
+input group "📊 Dashboard Configuration"
+input bool InpShowDashboard = true;                  // Show Enhanced Dashboard
+input int InpDashboardSize = 2;                      // Dashboard Size (0=Small,1=Normal,2=Large)
+input int InpDashboardPosition = 1;                  // Dashboard Position (0=TopLeft,1=TopRight,2=BottomLeft,3=BottomRight)
+
+//--- Indicator buffers
+double WaveOuterBuffer[];
+double WaveMidBuffer[];
+double WaveCoreBuffer[];
+double PriceLineBuffer[];
+double Fib8HighBuffer[];
+double Fib8LowBuffer[];
+double Fib13HighBuffer[];
+double Fib13LowBuffer[];
+double Fib21HighBuffer[];
+double Fib21LowBuffer[];
+double Fib34HighBuffer[];
+double Fib34LowBuffer[];
+double Fib55HighBuffer[];
+double Fib55LowBuffer[];
+double EntropyBuffer[];
+double ProbabilityBuffer[];
+double StateBuffer[];
+double VelocityBuffer[];
+double AccelerationBuffer[];
+double TrendBuffer[];
+
+//--- Global calculation variables
+double g_last_valid_peak_price = 0;
+double g_last_valid_peak_velocity = 0;
+double g_last_valid_valley_price = 0;
+double g_last_valid_valley_velocity = 0;
+int g_lastSignalBar = -1;
+string g_lastSignalType = "None";
+double g_lastPeakProb = 0;
+double g_lastValleyProb = 0;
+int g_barsSinceSignal = 0;
+bool g_isTradeActive = false;
+string g_activeSignalDirection = "";
+
+//--- Color variables
+color g_bullColor;
+color g_bearColor;
+color g_quantumColor;
+
+//--- Handles for built-in indicators
+int g_rsiHandle = INVALID_HANDLE;
+int g_atrHandle = INVALID_HANDLE;
+
+//--- Arrays for EMA calculation
+double g_emaArray[];
+int g_emaLastPeriod = 0;
+
+//--- Arrays for Supertrend calculation
+int g_supertrendArray[];
+double g_supertrendUpperArray[];
+double g_supertrendLowerArray[];
+
+//--- Live signal tracking
+bool g_livePeakEvent = false;
+bool g_liveValleyEvent = false;
+double g_livePeakProb = 0;
+double g_liveValleyProb = 0;
+
+//--- Object tracking
+datetime g_lastObjectCleanupTime = 0;
+int g_objectCounter = 0;
+
+//+------------------------------------------------------------------+
+//| Custom indicator initialization function                         |
+//+------------------------------------------------------------------+
+int OnInit()
+{
+    //--- Indicator buffers mapping
+    SetIndexBuffer(0, WaveOuterBuffer, INDICATOR_DATA);
+    SetIndexBuffer(1, WaveMidBuffer, INDICATOR_DATA);
+    SetIndexBuffer(2, WaveCoreBuffer, INDICATOR_DATA);
+    SetIndexBuffer(3, PriceLineBuffer, INDICATOR_DATA);
+    SetIndexBuffer(4, Fib8HighBuffer, INDICATOR_CALCULATIONS);
+    SetIndexBuffer(5, Fib8LowBuffer, INDICATOR_CALCULATIONS);
+    SetIndexBuffer(6, Fib13HighBuffer, INDICATOR_CALCULATIONS);
+    SetIndexBuffer(7, Fib13LowBuffer, INDICATOR_CALCULATIONS);
+    SetIndexBuffer(8, Fib21HighBuffer, INDICATOR_CALCULATIONS);
+    SetIndexBuffer(9, Fib21LowBuffer, INDICATOR_CALCULATIONS);
+    SetIndexBuffer(10, Fib34HighBuffer, INDICATOR_CALCULATIONS);
+    SetIndexBuffer(11, Fib34LowBuffer, INDICATOR_CALCULATIONS);
+    SetIndexBuffer(12, Fib55HighBuffer, INDICATOR_CALCULATIONS);
+    SetIndexBuffer(13, Fib55LowBuffer, INDICATOR_CALCULATIONS);
+    SetIndexBuffer(14, EntropyBuffer, INDICATOR_CALCULATIONS);
+    SetIndexBuffer(15, ProbabilityBuffer, INDICATOR_CALCULATIONS);
+    SetIndexBuffer(16, StateBuffer, INDICATOR_CALCULATIONS);
+    SetIndexBuffer(17, VelocityBuffer, INDICATOR_CALCULATIONS);
+    SetIndexBuffer(18, AccelerationBuffer, INDICATOR_CALCULATIONS);
+    SetIndexBuffer(19, TrendBuffer, INDICATOR_CALCULATIONS);
+    
+    //--- Set arrays as series
+    ArraySetAsSeries(WaveOuterBuffer, true);
+    ArraySetAsSeries(WaveMidBuffer, true);
+    ArraySetAsSeries(WaveCoreBuffer, true);
+    ArraySetAsSeries(PriceLineBuffer, true);
+    ArraySetAsSeries(Fib8HighBuffer, true);
+    ArraySetAsSeries(Fib8LowBuffer, true);
+    ArraySetAsSeries(Fib13HighBuffer, true);
+    ArraySetAsSeries(Fib13LowBuffer, true);
+    ArraySetAsSeries(Fib21HighBuffer, true);
+    ArraySetAsSeries(Fib21LowBuffer, true);
+    ArraySetAsSeries(Fib34HighBuffer, true);
+    ArraySetAsSeries(Fib34LowBuffer, true);
+    ArraySetAsSeries(Fib55HighBuffer, true);
+    ArraySetAsSeries(Fib55LowBuffer, true);
+    ArraySetAsSeries(EntropyBuffer, true);
+    ArraySetAsSeries(ProbabilityBuffer, true);
+    ArraySetAsSeries(StateBuffer, true);
+    ArraySetAsSeries(VelocityBuffer, true);
+    ArraySetAsSeries(AccelerationBuffer, true);
+    ArraySetAsSeries(TrendBuffer, true);
+    
+    //--- Set plot properties for harmonic wave
+    if(InpShowHarmonicWave)
+    {
+        PlotIndexSetInteger(0, PLOT_DRAW_TYPE, DRAW_LINE);
+        PlotIndexSetInteger(0, PLOT_LINE_STYLE, STYLE_DOT);
+        PlotIndexSetInteger(0, PLOT_LINE_WIDTH, 1);
+        PlotIndexSetString(0, PLOT_LABEL, "Wave Outer");
+        
+        PlotIndexSetInteger(1, PLOT_DRAW_TYPE, DRAW_LINE);
+        PlotIndexSetInteger(1, PLOT_LINE_STYLE, STYLE_DOT);
+        PlotIndexSetInteger(1, PLOT_LINE_WIDTH, 1);
+        PlotIndexSetString(1, PLOT_LABEL, "Wave Mid");
+        
+        PlotIndexSetInteger(2, PLOT_DRAW_TYPE, DRAW_LINE);
+        PlotIndexSetInteger(2, PLOT_LINE_STYLE, STYLE_DOT);
+        PlotIndexSetInteger(2, PLOT_LINE_WIDTH, 1);
+        PlotIndexSetString(2, PLOT_LABEL, "Wave Core");
+        
+        PlotIndexSetInteger(3, PLOT_DRAW_TYPE, DRAW_LINE);
+        PlotIndexSetInteger(3, PLOT_LINE_WIDTH, 2);
+        PlotIndexSetString(3, PLOT_LABEL, "Price");
+    }
+    else
+    {
+        PlotIndexSetInteger(0, PLOT_DRAW_TYPE, DRAW_NONE);
+        PlotIndexSetInteger(1, PLOT_DRAW_TYPE, DRAW_NONE);
+        PlotIndexSetInteger(2, PLOT_DRAW_TYPE, DRAW_NONE);
+        PlotIndexSetInteger(3, PLOT_DRAW_TYPE, DRAW_NONE);
+    }
+    
+    //--- Additional plot settings for Fibonacci levels
+    PlotIndexSetInteger(4, PLOT_DRAW_TYPE, DRAW_NONE);
+    PlotIndexSetInteger(5, PLOT_DRAW_TYPE, DRAW_NONE);
+    PlotIndexSetInteger(6, PLOT_DRAW_TYPE, DRAW_NONE);
+    PlotIndexSetInteger(7, PLOT_DRAW_TYPE, DRAW_NONE);
+    
+    //--- Initialize color theme
+    InitializeColorTheme();
+    
+    //--- Set plot colors
+    PlotIndexSetInteger(0, PLOT_LINE_COLOR, g_quantumColor);
+    PlotIndexSetInteger(1, PLOT_LINE_COLOR, g_quantumColor);
+    PlotIndexSetInteger(2, PLOT_LINE_COLOR, g_quantumColor);
+    PlotIndexSetInteger(3, PLOT_LINE_COLOR, g_quantumColor);
+    
+    //--- Create RSI indicator handle
+    g_rsiHandle = iRSI(_Symbol, PERIOD_CURRENT, InpRsiLen, PRICE_CLOSE);
+    if(g_rsiHandle == INVALID_HANDLE)
+    {
+        Print("Failed to create RSI indicator handle. Error: ", GetLastError());
+        return(INIT_FAILED);
+    }
+    
+    //--- Create ATR indicator handle
+    g_atrHandle = iATR(_Symbol, PERIOD_CURRENT, 14);
+    if(g_atrHandle == INVALID_HANDLE)
+    {
+        Print("Failed to create ATR indicator handle. Error: ", GetLastError());
+        IndicatorRelease(g_rsiHandle);
+        return(INIT_FAILED);
+    }
+    
+    //--- Initialize arrays for calculations
+    ArrayResize(g_emaArray, 0);
+    ArrayResize(g_supertrendArray, 0);
+    ArrayResize(g_supertrendUpperArray, 0);
+    ArrayResize(g_supertrendLowerArray, 0);
+    
+    //--- Set indicator short name
+    IndicatorSetString(INDICATOR_SHORTNAME, "⇋ RPD");
+    IndicatorSetInteger(INDICATOR_DIGITS, 4);
+    
+    //--- Success
+    Print("Reversal Point Dynamics initialized successfully");
+    return(INIT_SUCCEEDED);
+}
+
+//+------------------------------------------------------------------+
+//| Custom indicator deinitialization function                       |
+//+------------------------------------------------------------------+
+void OnDeinit(const int reason)
+{
+    //--- Release indicator handles
+    if(g_rsiHandle != INVALID_HANDLE)
+    {
+        IndicatorRelease(g_rsiHandle);
+        g_rsiHandle = INVALID_HANDLE;
+    }
+    
+    if(g_atrHandle != INVALID_HANDLE)
+    {
+        IndicatorRelease(g_atrHandle);
+        g_atrHandle = INVALID_HANDLE;
+    }
+    
+    //--- Delete all created objects
+    DeleteAllChartObjects();
+    
+    //--- Clear comment
+    Comment("");
+    
+    //--- Print deinitialization reason
+    string reason_text = "";
+    switch(reason)
+    {
+        case REASON_PROGRAM: reason_text = "Program terminated"; break;
+        case REASON_REMOVE: reason_text = "Indicator removed from chart"; break;
+        case REASON_RECOMPILE: reason_text = "Indicator recompiled"; break;
+        case REASON_CHARTCHANGE: reason_text = "Chart symbol or period changed"; break;
+        case REASON_CHARTCLOSE: reason_text = "Chart closed"; break;
+        case REASON_PARAMETERS: reason_text = "Input parameters changed"; break;
+        case REASON_ACCOUNT: reason_text = "Account changed"; break;
+        case REASON_TEMPLATE: reason_text = "Template changed"; break;
+        case REASON_INITFAILED: reason_text = "Initialization failed"; break;
+        case REASON_CLOSE: reason_text = "Terminal closed"; break;
+        default: reason_text = "Unknown reason"; break;
+    }
+    Print("Reversal Point Dynamics deinitialized. Reason: ", reason_text);
+}
+
+//+------------------------------------------------------------------+
+//| Custom indicator iteration function                              |
+//+------------------------------------------------------------------+
+int OnCalculate(const int rates_total,
+                const int prev_calculated,
+                const datetime &time[],
+                const double &open[],
+                const double &high[],
+                const double &low[],
+                const double &close[],
+                const long &tick_volume[],
+                const long &volume[],
+                const int &spread[])
+{
+    //--- Check for minimum bars
+    int min_bars = InpAdaptivePeriod + InpFractalStrength * 2 + 10;
+    if(rates_total < min_bars)
+    {
+        Print("Not enough bars for calculation. Need: ", min_bars, ", Got: ", rates_total);
+        return(0);
+    }
+    
+    //--- Set arrays as series
+    ArraySetAsSeries(time, true);
+    ArraySetAsSeries(open, true);
+    ArraySetAsSeries(high, true);
+    ArraySetAsSeries(low, true);
+    ArraySetAsSeries(close, true);
+    ArraySetAsSeries(tick_volume, true);
+    ArraySetAsSeries(volume, true);
+    
+    //--- Prepare ATR data
+    double atrArray[];
+    ArraySetAsSeries(atrArray, true);
+    int atr_copied = CopyBuffer(g_atrHandle, 0, 0, rates_total, atrArray);
+    if(atr_copied <= 0)
+    {
+        Print("Failed to copy ATR data. Error: ", GetLastError());
+        return(prev_calculated);
+    }
+    
+    //--- Prepare RSI data
+    double rsiArray[];
+    ArraySetAsSeries(rsiArray, true);
+    int rsi_copied = CopyBuffer(g_rsiHandle, 0, 0, rates_total, rsiArray);
+    if(rsi_copied <= 0)
+    {
+        Print("Failed to copy RSI data. Error: ", GetLastError());
+        return(prev_calculated);
+    }
+    
+    //--- Initialize Supertrend arrays if needed
+    if(ArraySize(g_supertrendArray) != rates_total)
+    {
+        ArrayResize(g_supertrendArray, rates_total);
+        ArrayResize(g_supertrendUpperArray, rates_total);
+        ArrayResize(g_supertrendLowerArray, rates_total);
+        ArraySetAsSeries(g_supertrendArray, true);
+        ArraySetAsSeries(g_supertrendUpperArray, true);
+        ArraySetAsSeries(g_supertrendLowerArray, true);
+        ArrayInitialize(g_supertrendArray, 1);
+    }
+    
+    //--- Calculate start position
+    int start_pos;
+    if(prev_calculated == 0)
+    {
+        start_pos = rates_total - min_bars - 1;
+        
+        //--- Initialize all buffers
+        ArrayInitialize(WaveOuterBuffer, 0);
+        ArrayInitialize(WaveMidBuffer, 0);
+        ArrayInitialize(WaveCoreBuffer, 0);
+        ArrayInitialize(PriceLineBuffer, 0);
+        ArrayInitialize(Fib8HighBuffer, 0);
+        ArrayInitialize(Fib8LowBuffer, 0);
+        ArrayInitialize(Fib13HighBuffer, 0);
+        ArrayInitialize(Fib13LowBuffer, 0);
+        ArrayInitialize(Fib21HighBuffer, 0);
+        ArrayInitialize(Fib21LowBuffer, 0);
+        ArrayInitialize(Fib34HighBuffer, 0);
+        ArrayInitialize(Fib34LowBuffer, 0);
+        ArrayInitialize(Fib55HighBuffer, 0);
+        ArrayInitialize(Fib55LowBuffer, 0);
+        ArrayInitialize(EntropyBuffer, 0.5);
+        ArrayInitialize(ProbabilityBuffer, 0);
+        ArrayInitialize(StateBuffer, 0);
+        ArrayInitialize(VelocityBuffer, 0);
+        ArrayInitialize(AccelerationBuffer, 0);
+        ArrayInitialize(TrendBuffer, 1);
+    }
+    else
+    {
+        start_pos = rates_total - prev_calculated;
+    }
+    
+    //--- Main calculation loop - process from oldest to newest
+    for(int i = start_pos; i >= 0 && !IsStopped(); i--)
+    {
+        //--- Calculate HLCC4
+        double hlcc4_value = CalculateHLCC4(open[i], high[i], low[i], close[i]);
+        
+        //--- Calculate HLC3 smooth using WMA
+        double hlc3_value = (high[i] + low[i] + close[i]) / 3.0;
+        double hlc3_smooth = CalculateWMA(hlc3_value, i, 3, close, rates_total);
+        PriceLineBuffer[i] = hlc3_smooth;
+        
+        //--- Get ATR value
+        double atrValue = atrArray[i];
+        
+        //--- Calculate Entropy
+        double entropy = CalculateEntropy(i, InpAdaptivePeriod, close, rates_total);
+        EntropyBuffer[i] = entropy;
+        
+        //--- Calculate Quantum State Analysis
+        double state_value = 0;
+        double statePercent = 0;
+        CalculateQuantumStateAnalysis(i, hlc3_smooth, InpAnalysisLevels, InpAdaptivePeriod, 
+                                     high, low, rates_total, state_value, statePercent);
+        StateBuffer[i] = state_value;
+        
+        //--- Calculate PSR (Phase Space Reconstruction)
+        double psr_velocity = 0;
+        double psr_acceleration = 0;
+        CalculatePSR(i, hlc3_smooth, InpAdaptivePeriod, close, rates_total, 
+                    psr_velocity, psr_acceleration);
+        VelocityBuffer[i] = psr_velocity;
+        AccelerationBuffer[i] = psr_acceleration;
+        
+        //--- Get RSI value
+        double rsi = rsiArray[i];
+        bool rsiTopCond = InpEnableRSI && (rsi > InpRsiTop);
+        bool rsiBotCond = InpEnableRSI && (rsi < InpRsiBot);
+        
+        //--- Calculate Supertrend
+        int rTrend = CalculateSupertrend(i, hlcc4_value, 1.1, 16, high, low, close, 
+                                        atrArray, rates_total);
+        TrendBuffer[i] = rTrend;
+        
+        //--- Check volume spike
+        bool volSpike = CheckVolumeSpike(i, InpVolLookback, InpVolMultiplier, 
+                                        volume, rates_total);
+        
+        //--- Calculate average volume for recent bars
+        double avgVolRecent = CalculateAvgVolume(i, 5, volume, rates_total);
+        
+        //--- Detect pivots
+        bool isPivotHigh = false;
+        bool isPivotLow = false;
+        if(i + 2 < rates_total)
+        {
+            isPivotHigh = (high[i+1] > high[i+2]) && (high[i+1] > high[i]);
+            isPivotLow = (low[i+1] < low[i+2]) && (low[i+1] < low[i]);
+        }
+        
+        //--- Detect fractals
+        bool isFractalHigh = false;
+        bool isFractalLow = false;
+        if(i + InpFractalStrength * 2 < rates_total)
+        {
+            isFractalHigh = CheckFractalHigh(i + InpFractalStrength, InpFractalStrength, 
+                                            high, rates_total);
+            isFractalLow = CheckFractalLow(i + InpFractalStrength, InpFractalStrength, 
+                                          low, rates_total);
+        }
+        
+        //--- Determine events
+        bool isPeakEvent = false;
+        bool isValleyEvent = false;
+        double peak_price_at_pivot = 0;
+        double valley_price_at_pivot = 0;
+        
+        if(i + 1 < rates_total)
+        {
+            isPeakEvent = (isPivotHigh || isFractalHigh) && (close[i] < low[i+1]);
+            isValleyEvent = (isPivotLow || isFractalLow) && (close[i] > high[i+1]);
+            
+            if(isPeakEvent)
+                peak_price_at_pivot = high[i+1];
+            if(isValleyEvent)
+                valley_price_at_pivot = low[i+1];
+        }
+        
+        //--- Check for divergence
+        bool isBearishDivergence = false;
+        bool isBullishDivergence = false;
+        
+        if(isPeakEvent && g_last_valid_peak_price > 0)
+        {
+            if(peak_price_at_pivot > g_last_valid_peak_price && 
+               psr_velocity < g_last_valid_peak_velocity)
+            {
+                isBearishDivergence = true;
+            }
+        }
+        
+        if(isValleyEvent && g_last_valid_valley_price > 0)
+        {
+            if(valley_price_at_pivot < g_last_valid_valley_price && 
+               psr_velocity > g_last_valid_valley_velocity)
+            {
+                isBullishDivergence = true;
+            }
+        }
+        
+        //--- Check state requirements for peaks and valleys
+        bool isPeakStateReqMet = false;
+        bool isValleyStateReqMet = false;
+        
+        if(isPeakEvent)
+        {
+            isPeakStateReqMet = (state_value >= InpAnalysisLevels - 1 - InpEdgeSensitivity) && 
+                               (rTrend == -1);
+        }
+        
+        if(isValleyEvent)
+        {
+            isValleyStateReqMet = (state_value <= InpEdgeSensitivity) && 
+                                 (rTrend == 1);
+        }
+        
+        //--- Check for predictive signals
+        bool isPotentialPeak = false;
+        bool isPotentialValley = false;
+        
+        if(InpPredictiveMode)
+        {
+            isPotentialPeak = (state_value >= InpAnalysisLevels - 1 - InpEdgeSensitivity) && 
+                             (psr_acceleration < 0) && 
+                             (entropy < InpEntropyThreshold) && 
+                             (rTrend == -1);
+            
+            isPotentialValley = (state_value <= InpEdgeSensitivity) && 
+                               (psr_acceleration > 0) && 
+                               (entropy < InpEntropyThreshold) && 
+                               (rTrend == 1);
+        }
+        
+        //--- Calculate trend strength for probability
+        double trendStrength = MathAbs(CalculateEMA(psr_velocity, 10, i, close, rates_total));
+        
+        //--- Calculate probabilities
+        double peakProb = 0;
+        double valleyProb = 0;
+        
+        if(isPeakStateReqMet || isPotentialPeak)
+        {
+            peakProb = CalculateProbability(entropy, isBearishDivergence, trendStrength, 
+                                           atrValue, rsi, InpRsiTop, rsiTopCond, 
+                                           volSpike, volume[i], avgVolRecent, 
+                                           high[i], low[i], isPeakEvent, true);
+        }
+        
+        if(isValleyStateReqMet || isPotentialValley)
+        {
+            valleyProb = CalculateProbability(entropy, isBullishDivergence, trendStrength, 
+                                             atrValue, rsi, InpRsiBot, rsiBotCond, 
+                                             volSpike, volume[i], avgVolRecent, 
+                                             high[i], low[i], isValleyEvent, false);
+        }
+        
+        //--- Store probability in buffer
+        ProbabilityBuffer[i] = MathMax(peakProb, valleyProb);
+        
+        //--- Calculate effective parameters
+        double effectiveMinProb = InpMinProbThreshold;
+        if(InpAdaptiveEntropy && atrValue > 0)
+        {
+            effectiveMinProb -= (trendStrength / atrValue * 5);
+        }
+        
+        int effectiveMinDistance = InpAggressiveMode ? 1 : InpMinSignalDistance;
+        double effectiveEntropyThresh = InpAggressiveMode ? 0.95 : InpEntropyThreshold;
+        
+        //--- Check signal validity
+        bool validPeak = false;
+        bool validValley = false;
+        
+        int current_bar_count = rates_total - 1 - i;
+        
+        if(isPeakStateReqMet || isPotentialPeak)
+        {
+            if(peakProb >= effectiveMinProb)
+            {
+                if(g_lastSignalBar < 0 || (current_bar_count - g_lastSignalBar >= effectiveMinDistance))
+                {
+                    validPeak = true;
+                }
+            }
+        }
+        
+        if(isValleyStateReqMet || isPotentialValley)
+        {
+            if(valleyProb >= effectiveMinProb)
+            {
+                if(g_lastSignalBar < 0 || (current_bar_count - g_lastSignalBar >= effectiveMinDistance))
+                {
+                    validValley = true;
+                }
+            }
+        }
+        
+        //--- Create signals for confirmed bars only (not current bar)
+        if(i > 0)
+        {
+            if(validPeak)
+            {
+                bool isPredictiveSignal = isPotentialPeak && !isPeakStateReqMet;
+                CreatePeakSignal(time[i], peak_price_at_pivot > 0 ? peak_price_at_pivot : high[i], 
+                               peakProb, atrValue, isPredictiveSignal, isBearishDivergence);
+                
+                g_lastSignalBar = current_bar_count;
+                g_lastSignalType = "Peak";
+                g_lastPeakProb = peakProb;
+                g_barsSinceSignal = 0;
+                
+                if(peak_price_at_pivot > 0)
+                {
+                    g_last_valid_peak_price = peak_price_at_pivot;
+                    g_last_valid_peak_velocity = psr_velocity;
+                }
+            }
+            
+            if(validValley)
+            {
+                bool isPredictiveSignal = isPotentialValley && !isValleyStateReqMet;
+                CreateValleySignal(time[i], valley_price_at_pivot > 0 ? valley_price_at_pivot : low[i], 
+                                 valleyProb, atrValue, isPredictiveSignal, isBullishDivergence);
+                
+                g_lastSignalBar = current_bar_count;
+                g_lastSignalType = "Valley";
+                g_lastValleyProb = valleyProb;
+                g_barsSinceSignal = 0;
+                
+                if(valley_price_at_pivot > 0)
+                {
+                    g_last_valid_valley_price = valley_price_at_pivot;
+                    g_last_valid_valley_velocity = psr_velocity;
+                }
+            }
+        }
+        
+        //--- Calculate harmonic wave
+        if(InpShowHarmonicWave)
+        {
+            int wave_period = (int)MathRound(InpAdaptivePeriod * 1.5);
+            if(wave_period < 1) wave_period = 1;
+            
+            double wave_sine = MathSin(2.0 * M_PI * current_bar_count / wave_period);
+            double wave_stdev = CalculateStdDev(i, wave_period, close, rates_total);
+            double wave_component = wave_sine * wave_stdev * 1.5 + hlc3_smooth;
+            double wave_outer = CalculateSMA(wave_component, i, 3, close, rates_total);
+            
+            WaveOuterBuffer[i] = wave_outer;
+            WaveMidBuffer[i] = hlc3_smooth + (wave_outer - hlc3_smooth) * 0.66;
+            WaveCoreBuffer[i] = hlc3_smooth + (wave_outer - hlc3_smooth) * 0.33;
+        }
+        
+        //--- Calculate Fibonacci levels
+        if(i + 8 < rates_total) Fib8HighBuffer[i] = CalculateHighest(i, 8, high, rates_total);
+        if(i + 8 < rates_total) Fib8LowBuffer[i] = CalculateLowest(i, 8, low, rates_total);
+        if(i + 13 < rates_total) Fib13HighBuffer[i] = CalculateHighest(i, 13, high, rates_total);
+        if(i + 13 < rates_total) Fib13LowBuffer[i] = CalculateLowest(i, 13, low, rates_total);
+        if(i + 21 < rates_total) Fib21HighBuffer[i] = CalculateHighest(i, 21, high, rates_total);
+        if(i + 21 < rates_total) Fib21LowBuffer[i] = CalculateLowest(i, 21, low, rates_total);
+        if(i + 34 < rates_total) Fib34HighBuffer[i] = CalculateHighest(i, 34, high, rates_total);
+        if(i + 34 < rates_total) Fib34LowBuffer[i] = CalculateLowest(i, 34, low, rates_total);
+        if(i + 55 < rates_total) Fib55HighBuffer[i] = CalculateHighest(i, 55, high, rates_total);
+        if(i + 55 < rates_total) Fib55LowBuffer[i] = CalculateLowest(i, 55, low, rates_total);
+        
+        //--- Create entropy particles on current bar
+        if(i == 0 && InpShowEntropyParticles)
+        {
+            double flow_strength = 1.0 - (entropy / effectiveEntropyThresh);
+            if(flow_strength > 0)
+            {
+                color particle_color = psr_velocity > 0 ? g_bullColor : g_bearColor;
+                double y_pos = psr_velocity > 0 ? low[i] - atrValue * 0.1 : high[i] + atrValue * 0.1;
+                CreateEntropyParticle(time[i], y_pos, particle_color, flow_strength);
+            }
+        }
+    }
+    
+    //--- Update bars since signal counter
+    if(g_lastSignalBar >= 0)
+    {
+        g_barsSinceSignal = rates_total - 1 - g_lastSignalBar;
+    }
+    
+    //--- Handle live signals on current bar
+    if(InpLiveSignalMode && rates_total > 0)
+    {
+double effectiveMinProb = InpMinProbThreshold;
+if(InpAdaptiveEntropy && atrArray[0] > 0)
+{
+    double trendStrength = MathAbs(CalculateEMA(VelocityBuffer[0], 10, 0, close, rates_total));
+    effectiveMinProb -= (trendStrength / atrArray[0] * 5);
+}
+
+ProcessLiveSignals(time[0], high[0], low[0], close[0], open[0], 
+                  EntropyBuffer[0], atrArray[0], VelocityBuffer[0], 
+                  AccelerationBuffer[0], effectiveMinProb);
+    }
+    
+    //--- Draw Fibonacci levels on current bar
+    if(InpShowFibLevels)
+    {
+        DrawFibonacciLevels(time[0], rsiArray[0], atrArray[0]);
+    }
+    
+    //--- Update dashboard on current bar
+    if(InpShowDashboard)
+    {
+        UpdateDashboard(close[0], high[0], low[0], EntropyBuffer[0], 
+                       ProbabilityBuffer[0], volume[0], rsiArray[0], 
+                       TrendBuffer[0], VelocityBuffer[0]);
+    }
+    
+    //--- Create watermark
+    CreateWatermark();
+    
+    //--- Clean up old objects periodically
+    if(TimeCurrent() - g_lastObjectCleanupTime > 60)
+    {
+        CleanupOldObjects(time[0]);
+        g_lastObjectCleanupTime = TimeCurrent();
+    }
+    
+    //--- Return value of prev_calculated for next call
+    return(rates_total);
+}
+
+//+------------------------------------------------------------------+
+//| Initialize color theme                                           |
+//+------------------------------------------------------------------+
+void InitializeColorTheme()
+{
+    switch(InpColorTheme)
+    {
+        case 0: // Neon
+            g_bullColor = clrLime;
+            g_bearColor = clrDeepPink;
+            g_quantumColor = clrAqua;
+            break;
+        case 1: // Cyber
+            g_bullColor = clrCyan;
+            g_bearColor = clrMagenta;
+            g_quantumColor = clrMediumPurple;
+            break;
+        case 2: // Solar
+            g_bullColor = clrGold;
+            g_bearColor = clrCrimson;
+            g_quantumColor = clrOrange;
+            break;
+        case 3: // Ocean
+            g_bullColor = clrAquamarine;
+            g_bearColor = clrHotPink;
+            g_quantumColor = clrDeepSkyBlue;
+            break;
+        case 4: // Aurora
+            g_bullColor = clrSpringGreen;
+            g_bearColor = clrMediumPurple;
+            g_quantumColor = clrLightSeaGreen;
+            break;
+        case 5: // Plasma
+            g_bullColor = clrMagenta;
+            g_bearColor = clrDeepSkyBlue;
+            g_quantumColor = clrDeepPink;
+            break;
+        default:
+            g_bullColor = clrLime;
+            g_bearColor = clrDeepPink;
+            g_quantumColor = clrAqua;
+            break;
+    }
+}
+
+//+------------------------------------------------------------------+
+//| Calculate HLCC4                                                   |
+//+------------------------------------------------------------------+
+double CalculateHLCC4(double o, double h, double l, double c)
+{
+    return (h + l + c + c) / 4.0;
+}
+
+//+------------------------------------------------------------------+
+//| Calculate Weighted Moving Average                                |
+//+------------------------------------------------------------------+
+double CalculateWMA(double center_value, int shift, int period, 
+                   const double &price[], int rates_total)
+{
+    if(shift + period > rates_total)
+        return center_value;
+    
+    double sum = 0;
+    double weight_sum = 0;
+    
+    for(int i = 0; i < period; i++)
+    {
+        int idx = shift + i;
+        if(idx >= rates_total)
+            break;
+        
+        double weight = period - i;
+        sum += price[idx] * weight;
+        weight_sum += weight;
+    }
+    
+    if(weight_sum > 0)
+        return sum / weight_sum;
+    
+    return center_value;
+}
+
+//+------------------------------------------------------------------+
+//| Calculate Simple Moving Average                                  |
+//+------------------------------------------------------------------+
+double CalculateSMA(double center_value, int shift, int period, 
+                   const double &price[], int rates_total)
+{
+    if(shift + period > rates_total)
+        return center_value;
+    
+    double sum = 0;
+    int count = 0;
+    
+    for(int i = 0; i < period; i++)
+    {
+        int idx = shift + i;
+        if(idx >= rates_total)
+            break;
+        
+        sum += price[idx];
+        count++;
+    }
+    
+    if(count > 0)
+        return sum / count;
+    
+    return center_value;
+}
+
+//+------------------------------------------------------------------+
+//| Calculate Exponential Moving Average                             |
+//+------------------------------------------------------------------+
+double CalculateEMA(double value, int period, int shift, 
+                   const double &price[], int rates_total)
+{
+    if(ArraySize(g_emaArray) != rates_total || g_emaLastPeriod != period)
+    {
+        ArrayResize(g_emaArray, rates_total);
+        ArraySetAsSeries(g_emaArray, true);
+        ArrayInitialize(g_emaArray, 0);
+        g_emaLastPeriod = period;
+    }
+    
+    double alpha = 2.0 / (period + 1.0);
+    
+    if(shift >= rates_total - 1)
+    {
+        g_emaArray[shift] = price[shift];
+    }
+    else if(shift + 1 < rates_total)
+    {
+        if(g_emaArray[shift + 1] == 0)
+            g_emaArray[shift + 1] = price[shift + 1];
+        
+        g_emaArray[shift] = price[shift] * alpha + g_emaArray[shift + 1] * (1.0 - alpha);
+    }
+    else
+    {
+        g_emaArray[shift] = price[shift];
+    }
+    
+    return g_emaArray[shift];
+}
+
+//+------------------------------------------------------------------+
+//| Calculate Standard Deviation                                     |
+//+------------------------------------------------------------------+
+double CalculateStdDev(int shift, int period, const double &price[], 
+                      int rates_total)
+{
+    if(shift + period > rates_total)
+        return 0;
+    
+    double mean = CalculateSMA(0, shift, period, price, rates_total);
+    double sum = 0;
+    int count = 0;
+    
+    for(int i = 0; i < period; i++)
+    {
+        int idx = shift + i;
+        if(idx >= rates_total)
+            break;
+        
+        double diff = price[idx] - mean;
+        sum += diff * diff;
+        count++;
+    }
+    
+    if(count > 0)
+        return MathSqrt(sum / count);
+    
+    return 0;
+}
+
+//+------------------------------------------------------------------+
+//| Calculate Entropy                                                |
+//+------------------------------------------------------------------+
+double CalculateEntropy(int shift, int length, const double &price[], 
+                       int rates_total)
+{
+    if(shift + length >= rates_total)
+        return 0.5;
+    
+    double upChanges = 0;
+    double total = 0;
+    
+    for(int i = 0; i < length; i++)
+    {
+        int idx = shift + i;
+        int idx_next = idx + 1;
+        
+        if(idx_next >= rates_total)
+            break;
+        
+        double priceChange = price[idx] - price[idx_next];
+        total += 1.0;
+        
+        if(priceChange > 0)
+            upChanges += 1.0;
+    }
+    
+    if(total == 0)
+        return 0.5;
+    
+    double p = upChanges / total;
+    
+    if(p > 0 && p < 1)
+    {
+        double entropy = (-p * MathLog(p) - (1.0 - p) * MathLog(1.0 - p)) / MathLog(2.0);
+        return entropy;
+    }
+    
+    return 0.5;
+}
+
+//+------------------------------------------------------------------+
+//| Calculate Quantum State Analysis                                 |
+//+------------------------------------------------------------------+
+void CalculateQuantumStateAnalysis(int shift, double price, int states, 
+                                   int period, const double &high[], 
+                                   const double &low[], int rates_total, 
+                                   double &state, double &statePercent)
+{
+    if(shift + period > rates_total)
+    {
+        state = 0;
+        statePercent = 0;
+        return;
+    }
+    
+    double hi = CalculateHighest(shift, period, high, rates_total);
+    double lo = CalculateLowest(shift, period, low, rates_total);
+    double priceRange = hi - lo;
+    
+    if(priceRange > 0)
+    {
+        statePercent = (price - lo) / priceRange;
+        state = MathRound(statePercent * (states - 1));
+    }
+    else
+    {
+        state = 0;
+        statePercent = 0;
+    }
+}
+
+//+------------------------------------------------------------------+
+//| Calculate PSR (Phase Space Reconstruction)                       |
+//+------------------------------------------------------------------+
+void CalculatePSR(int shift, double price, int period, 
+                 const double &close[], int rates_total, 
+                 double &velocity, double &acceleration)
+{
+    int halfPeriod = (int)MathRound(period / 2.0);
+    
+    if(shift + halfPeriod < rates_total)
+        velocity = price - close[shift + halfPeriod];
+    else
+        velocity = 0;
+    
+    if(shift + 1 < rates_total)
+    {
+        double prevPrice = close[shift + 1];
+        double prevVelocity = 0;
+        
+        if(shift + 1 + halfPeriod < rates_total)
+            prevVelocity = prevPrice - close[shift + 1 + halfPeriod];
+        
+        acceleration = velocity - prevVelocity;
+    }
+    else
+    {
+        acceleration = 0;
+    }
+}
+
+//+------------------------------------------------------------------+
+//| Calculate Supertrend                                             |
+//+------------------------------------------------------------------+
+int CalculateSupertrend(int shift, double src, double mult, int len, 
+                       const double &high[], const double &low[], 
+                       const double &close[], const double &atr[], 
+                       int rates_total)
+{
+    if(shift >= rates_total)
+        return 1;
+    
+    double atrValue = atr[shift];
+    
+    g_supertrendUpperArray[shift] = src - mult * atrValue;
+    g_supertrendLowerArray[shift] = src + mult * atrValue;
+    
+    if(shift + 1 < rates_total)
+    {
+        if(close[shift + 1] > g_supertrendUpperArray[shift + 1])
+            g_supertrendUpperArray[shift] = MathMax(g_supertrendUpperArray[shift], 
+                                                    g_supertrendUpperArray[shift + 1]);
+        
+        if(close[shift + 1] < g_supertrendLowerArray[shift + 1])
+            g_supertrendLowerArray[shift] = MathMin(g_supertrendLowerArray[shift], 
+                                                    g_supertrendLowerArray[shift + 1]);
+        
+        int prevTrend = g_supertrendArray[shift + 1];
+        
+        if(prevTrend == -1 && close[shift] > g_supertrendLowerArray[shift + 1])
+            g_supertrendArray[shift] = 1;
+        else if(prevTrend == 1 && close[shift] < g_supertrendUpperArray[shift + 1])
+            g_supertrendArray[shift] = -1;
+        else
+            g_supertrendArray[shift] = prevTrend;
+    }
+    else
+    {
+        g_supertrendArray[shift] = 1;
+    }
+    
+    return g_supertrendArray[shift];
+}
+
+//+------------------------------------------------------------------+
+//| Check Volume Spike                                               |
+//+------------------------------------------------------------------+
+bool CheckVolumeSpike(int shift, int lookback, double multiplier, 
+                     const long &volume[], int rates_total)
+{
+    if(shift + lookback >= rates_total)
+        return false;
+    
+    double sum = 0;
+    int count = 0;
+    
+    for(int i = 0; i < lookback; i++)
+    {
+        int idx = shift + i;
+        if(idx >= rates_total)
+            break;
+        
+        sum += (double)volume[idx];
+        count++;
+    }
+    
+    if(count == 0)
+        return false;
+    
+    double avgVol = sum / count;
+    
+    return (double)volume[shift] > multiplier * avgVol;
+}
+
+//+------------------------------------------------------------------+
+//| Calculate Average Volume                                         |
+//+------------------------------------------------------------------+
+double CalculateAvgVolume(int shift, int period, const long &volume[], 
+                         int rates_total)
+{
+    if(shift + period > rates_total)
+        return 0;
+    
+    double sum = 0;
+    int count = 0;
+    
+    for(int i = 0; i < period; i++)
+    {
+        int idx = shift + i;
+        if(idx >= rates_total)
+            break;
+        
+        sum += (double)volume[idx];
+        count++;
+    }
+    
+    if(count > 0)
+        return sum / count;
+    
+    return 0;
+}
+
+//+------------------------------------------------------------------+
+//| Check Fractal High                                               |
+//+------------------------------------------------------------------+
+bool CheckFractalHigh(int center, int strength, const double &high[], 
+                     int rates_total)
+{
+    if(center - strength < 0 || center + strength >= rates_total)
+        return false;
+    
+    double centerHigh = high[center];
+    
+    for(int i = 1; i <= strength; i++)
+    {
+        if(centerHigh <= high[center + i] || centerHigh <= high[center - i])
+            return false;
+    }
+    
+    return true;
+}
+
+//+------------------------------------------------------------------+
+//| Check Fractal Low                                                |
+//+------------------------------------------------------------------+
+bool CheckFractalLow(int center, int strength, const double &low[], 
+                    int rates_total)
+{
+    if(center - strength < 0 || center + strength >= rates_total)
+        return false;
+    
+    double centerLow = low[center];
+    
+    for(int i = 1; i <= strength; i++)
+    {
+        if(centerLow >= low[center + i] || centerLow >= low[center - i])
+            return false;
+    }
+    
+    return true;
+}
+
+//+------------------------------------------------------------------+
+//| Calculate Highest Value                                          |
+//+------------------------------------------------------------------+
+double CalculateHighest(int shift, int period, const double &high[], 
+                       int rates_total)
+{
+    if(shift + period > rates_total)
+        return 0;
+    
+    double highest = high[shift];
+    
+    for(int i = 0; i < period; i++)
+    {
+        int idx = shift + i;
+        if(idx >= rates_total)
+            break;
+        
+        if(high[idx] > highest)
+            highest = high[idx];
+    }
+    
+    return highest;
+}
+
+//+------------------------------------------------------------------+
+//| Calculate Lowest Value                                           |
+//+------------------------------------------------------------------+
+double CalculateLowest(int shift, int period, const double &low[], 
+                      int rates_total)
+{
+    if(shift + period > rates_total)
+        return 0;
+    
+    double lowest = low[shift];
+    
+    for(int i = 0; i < period; i++)
+    {
+        int idx = shift + i;
+        if(idx >= rates_total)
+            break;
+        
+        if(low[idx] < lowest)
+            lowest = low[idx];
+    }
+    
+    return lowest;
+}
+
+//+------------------------------------------------------------------+
+//| Calculate Probability                                            |
+//+------------------------------------------------------------------+
+double CalculateProbability(double p_entropy, bool isDivergence, 
+                           double trendStrength, double atrValue, 
+                           double rsi, double rsiThreshold, bool rsiCond,
+                           bool volSpike, long currentVolume, 
+                           double avgVolRecent, double barHigh, 
+                           double barLow, bool isEvent, bool isPeak)
+{
+    //--- Base score calculation
+    double base_score = 40.0;
+    
+    if(atrValue > 0)
+        base_score += (trendStrength / atrValue * 30.0);
+    
+    base_score += (1.0 - p_entropy) * 10.0;
+    
+    //--- Entropy score
+    double entropy_score = 0;
+    if(p_entropy < InpEntropyThreshold)
+        entropy_score = 10.0 + (1.0 - p_entropy) * 5.0;
+    else
+        entropy_score = -5.0;
+    
+    //--- Divergence bonus
+    double divergence_bonus = 0;
+    if(isDivergence)
+    {
+        divergence_bonus = 20.0;
+    }
+    
+    //--- RSI bonus
+    double rsi_bonus = 0;
+    if(InpEnableRSI && rsiCond)
+    {
+        rsi_bonus = 8.0 + (rsi - 50.0) / 5.0;
+    }
+    
+    //--- Volume bonus
+    double vol_bonus = 0;
+    if(volSpike && avgVolRecent > 0)
+    {
+        vol_bonus = 5.0 + ((double)currentVolume / avgVolRecent - 1.0) * 3.0;
+    }
+    
+    //--- Adaptive bonus
+    double adaptive_bonus = 0;
+    if(InpAdaptiveEntropy && trendStrength > atrValue)
+    {
+        adaptive_bonus = 10.0 + trendStrength * 0.5;
+    }
+    
+    //--- Bar range factor for variation
+    double barRange = barHigh - barLow;
+    double barRangeFactor = 1.0;
+    if(atrValue > 0)
+        barRangeFactor = barRange / atrValue;
+    
+    double variation = barRangeFactor * 3.0 - 1.5;
+    
+    //--- Calculate raw probability
+    double raw_prob = base_score + entropy_score + divergence_bonus + 
+                     rsi_bonus + vol_bonus + adaptive_bonus + variation;
+    
+    //--- Clamp between 40 and 99
+    if(raw_prob > 99.0)
+        raw_prob = 99.0;
+    if(raw_prob < 40.0)
+        raw_prob = 40.0;
+    
+    //--- Round to 1 decimal place
+    raw_prob = MathRound(raw_prob * 10.0) / 10.0;
+    
+    return raw_prob;
+}
+
+//+------------------------------------------------------------------+
+//| Create Peak Signal                                               |
+//+------------------------------------------------------------------+
+void CreatePeakSignal(datetime time, double price, double prob, 
+                     double atr, bool isPredictive, bool isDivergence)
+{
+    string icon = "▼";
+    if(isDivergence)
+        icon = "◈";
+    else if(isPredictive)
+        icon = "?";
+    
+    double iconY = price + atr * 0.7;
+    double probY = iconY + atr * 0.5;
+    
+    //--- Create icon label
+    string iconName = "PeakIcon_" + TimeToString(time, TIME_DATE|TIME_MINUTES) + 
+                     "_" + IntegerToString(g_objectCounter++);
+    
+    if(ObjectCreate(0, iconName, OBJ_TEXT, 0, time, iconY))
+    {
+        ObjectSetString(0, iconName, OBJPROP_TEXT, icon);
+        ObjectSetInteger(0, iconName, OBJPROP_COLOR, g_bearColor);
+        ObjectSetInteger(0, iconName, OBJPROP_FONTSIZE, GetFontSize(InpSignalSize));
+        ObjectSetString(0, iconName, OBJPROP_FONT, "Arial Black");
+        ObjectSetInteger(0, iconName, OBJPROP_ANCHOR, ANCHOR_CENTER);
+        ObjectSetInteger(0, iconName, OBJPROP_BACK, false);
+        ObjectSetInteger(0, iconName, OBJPROP_SELECTABLE, false);
+        ObjectSetInteger(0, iconName, OBJPROP_SELECTED, false);
+    }
+    
+    //--- Create probability label
+    string probName = "PeakProb_" + TimeToString(time, TIME_DATE|TIME_MINUTES) + 
+                     "_" + IntegerToString(g_objectCounter++);
+    
+    if(ObjectCreate(0, probName, OBJ_TEXT, 0, time, probY))
+    {
+        ObjectSetString(0, probName, OBJPROP_TEXT, DoubleToString(prob, 1) + "%");
+        ObjectSetInteger(0, probName, OBJPROP_COLOR, g_bearColor);
+        ObjectSetInteger(0, probName, OBJPROP_FONTSIZE, GetFontSize(InpSignalSize) - 2);
+        ObjectSetString(0, probName, OBJPROP_FONT, "Arial");
+        ObjectSetInteger(0, probName, OBJPROP_ANCHOR, ANCHOR_CENTER);
+        ObjectSetInteger(0, probName, OBJPROP_BACK, false);
+        ObjectSetInteger(0, probName, OBJPROP_SELECTABLE, false);
+        ObjectSetInteger(0, probName, OBJPROP_SELECTED, false);
+    }
+}
+
+//+------------------------------------------------------------------+
+//| Create Valley Signal                                             |
+//+------------------------------------------------------------------+
+void CreateValleySignal(datetime time, double price, double prob, 
+                       double atr, bool isPredictive, bool isDivergence)
+{
+    string icon = "▲";
+    if(isDivergence)
+        icon = "◈";
+    else if(isPredictive)
+        icon = "?";
+    
+    double iconY = price - atr * 0.7;
+    double probY = iconY - atr * 0.5;
+    
+    //--- Create icon label
+    string iconName = "ValleyIcon_" + TimeToString(time, TIME_DATE|TIME_MINUTES) + 
+                     "_" + IntegerToString(g_objectCounter++);
+    
+    if(ObjectCreate(0, iconName, OBJ_TEXT, 0, time, iconY))
+    {
+        ObjectSetString(0, iconName, OBJPROP_TEXT, icon);
+        ObjectSetInteger(0, iconName, OBJPROP_COLOR, g_bullColor);
+        ObjectSetInteger(0, iconName, OBJPROP_FONTSIZE, GetFontSize(InpSignalSize));
+        ObjectSetString(0, iconName, OBJPROP_FONT, "Arial Black");
+        ObjectSetInteger(0, iconName, OBJPROP_ANCHOR, ANCHOR_CENTER);
+        ObjectSetInteger(0, iconName, OBJPROP_BACK, false);
+        ObjectSetInteger(0, iconName, OBJPROP_SELECTABLE, false);
+        ObjectSetInteger(0, iconName, OBJPROP_SELECTED, false);
+    }
+    
+    //--- Create probability label
+    string probName = "ValleyProb_" + TimeToString(time, TIME_DATE|TIME_MINUTES) + 
+                     "_" + IntegerToString(g_objectCounter++);
+    
+    if(ObjectCreate(0, probName, OBJ_TEXT, 0, time, probY))
+    {
+        ObjectSetString(0, probName, OBJPROP_TEXT, DoubleToString(prob, 1) + "%");
+        ObjectSetInteger(0, probName, OBJPROP_COLOR, g_bullColor);
+        ObjectSetInteger(0, probName, OBJPROP_FONTSIZE, GetFontSize(InpSignalSize) - 2);
+        ObjectSetString(0, probName, OBJPROP_FONT, "Arial");
+        ObjectSetInteger(0, probName, OBJPROP_ANCHOR, ANCHOR_CENTER);
+        ObjectSetInteger(0, probName, OBJPROP_BACK, false);
+        ObjectSetInteger(0, probName, OBJPROP_SELECTABLE, false);
+        ObjectSetInteger(0, probName, OBJPROP_SELECTED, false);
+    }
+}
+
+//+------------------------------------------------------------------+
+//| Get Font Size                                                     |
+//+------------------------------------------------------------------+
+int GetFontSize(int sizeIndex)
+{
+    switch(sizeIndex)
+    {
+        case 0: return 8;   // Tiny
+        case 1: return 10;  // Small
+        case 2: return 12;  // Normal
+        case 3: return 14;  // Large
+        default: return 12;
+    }
+}
+
+//+------------------------------------------------------------------+
+//| Create Entropy Particle                                          |
+//+------------------------------------------------------------------+
+void CreateEntropyParticle(datetime time, double price, color clr, 
+                          double strength)
+{
+    string particleName = "Particle_" + TimeToString(time, TIME_DATE|TIME_MINUTES|TIME_SECONDS) + 
+                         "_" + IntegerToString(g_objectCounter++);
+    
+    if(ObjectCreate(0, particleName, OBJ_TEXT, 0, time, price))
+    {
+        ObjectSetString(0, particleName, OBJPROP_TEXT, "•");
+        ObjectSetInteger(0, particleName, OBJPROP_COLOR, clr);
+        ObjectSetInteger(0, particleName, OBJPROP_FONTSIZE, strength > 0.7 ? 10 : 8);
+        ObjectSetString(0, particleName, OBJPROP_FONT, "Arial");
+        ObjectSetInteger(0, particleName, OBJPROP_ANCHOR, ANCHOR_CENTER);
+        ObjectSetInteger(0, particleName, OBJPROP_BACK, false);
+        ObjectSetInteger(0, particleName, OBJPROP_SELECTABLE, false);
+        ObjectSetInteger(0, particleName, OBJPROP_SELECTED, false);
+    }
+}
+
+//+------------------------------------------------------------------+
+//| Process Live Signals                                             |
+//+------------------------------------------------------------------+
+void ProcessLiveSignals(datetime time, double currentHigh, double currentLow, 
+                       double currentClose, double currentOpen, 
+                       double entropy, double atr, double velocity, 
+                       double acceleration, double minProb)
+{
+    //--- Delete previous live signals
+    ObjectDelete(0, "LivePeakIcon");
+    ObjectDelete(0, "LivePeakProb");
+    ObjectDelete(0, "LiveValleyIcon");
+    ObjectDelete(0, "LiveValleyProb");
+    
+    g_livePeakEvent = false;
+    g_liveValleyEvent = false;
+    g_livePeakProb = 0;
+    g_liveValleyProb = 0;
+    
+    //--- Calculate projected values
+    double projectedHigh = MathMax(currentHigh, currentOpen);
+    double projectedLow = MathMin(currentLow, currentOpen);
+    double projectedClose = currentClose;
+    
+    double intraVelocity = currentClose - currentOpen;
+    double intraAcceleration = intraVelocity - velocity;
+    
+    double effectiveEntropyThresh = InpAggressiveMode ? 0.95 : InpEntropyThreshold;
+    
+    //--- Check for live peak
+    if(projectedHigh > currentHigh && projectedClose < projectedLow && 
+       intraAcceleration < 0 && entropy < effectiveEntropyThresh)
+    {
+        g_livePeakEvent = true;
+        g_livePeakProb = 50.0; // Simplified probability for live signals
+    }
+    
+    //--- Check for live valley
+    if(projectedLow < currentLow && projectedClose > projectedHigh && 
+       intraAcceleration > 0 && entropy < effectiveEntropyThresh)
+    {
+        g_liveValleyEvent = true;
+        g_liveValleyProb = 50.0; // Simplified probability for live signals
+    }
+    
+    //--- Create live peak signal
+    if(g_livePeakEvent && g_livePeakProb >= minProb)
+    {
+        double iconY = projectedHigh + atr * 0.7;
+        double probY = iconY + atr * 0.5;
+        
+        if(ObjectCreate(0, "LivePeakIcon", OBJ_TEXT, 0, time, iconY))
+        {
+            ObjectSetString(0, "LivePeakIcon", OBJPROP_TEXT, "!");
+            ObjectSetInteger(0, "LivePeakIcon", OBJPROP_COLOR, clrYellow);
+            ObjectSetInteger(0, "LivePeakIcon", OBJPROP_FONTSIZE, GetFontSize(InpSignalSize));
+            ObjectSetString(0, "LivePeakIcon", OBJPROP_FONT, "Arial Black");
+            ObjectSetInteger(0, "LivePeakIcon", OBJPROP_ANCHOR, ANCHOR_CENTER);
+        }
+        
+        if(ObjectCreate(0, "LivePeakProb", OBJ_TEXT, 0, time, probY))
+        {
+            ObjectSetString(0, "LivePeakProb", OBJPROP_TEXT, DoubleToString(g_livePeakProb, 1) + "%");
+            ObjectSetInteger(0, "LivePeakProb", OBJPROP_COLOR, clrYellow);
+            ObjectSetInteger(0, "LivePeakProb", OBJPROP_FONTSIZE, GetFontSize(InpSignalSize) - 2);
+            ObjectSetString(0, "LivePeakProb", OBJPROP_FONT, "Arial");
+            ObjectSetInteger(0, "LivePeakProb", OBJPROP_ANCHOR, ANCHOR_CENTER);
+        }
+    }
+    
+    //--- Create live valley signal
+    if(g_liveValleyEvent && g_liveValleyProb >= minProb)
+    {
+        double iconY = projectedLow - atr * 0.7;
+        double probY = iconY - atr * 0.5;
+        
+        if(ObjectCreate(0, "LiveValleyIcon", OBJ_TEXT, 0, time, iconY))
+        {
+            ObjectSetString(0, "LiveValleyIcon", OBJPROP_TEXT, "!");
+            ObjectSetInteger(0, "LiveValleyIcon", OBJPROP_COLOR, clrYellow);
+            ObjectSetInteger(0, "LiveValleyIcon", OBJPROP_FONTSIZE, GetFontSize(InpSignalSize));
+            ObjectSetString(0, "LiveValleyIcon", OBJPROP_FONT, "Arial Black");
+            ObjectSetInteger(0, "LiveValleyIcon", OBJPROP_ANCHOR, ANCHOR_CENTER);
+        }
+        
+        if(ObjectCreate(0, "LiveValleyProb", OBJ_TEXT, 0, time, probY))
+        {
+            ObjectSetString(0, "LiveValleyProb", OBJPROP_TEXT, DoubleToString(g_liveValleyProb, 1) + "%");
+            ObjectSetInteger(0, "LiveValleyProb", OBJPROP_COLOR, clrYellow);
+            ObjectSetInteger(0, "LiveValleyProb", OBJPROP_FONTSIZE, GetFontSize(InpSignalSize) - 2);
+            ObjectSetString(0, "LiveValleyProb", OBJPROP_FONT, "Arial");
+            ObjectSetInteger(0, "LiveValleyProb", OBJPROP_ANCHOR, ANCHOR_CENTER);
+        }
+    }
+}
+
+//+------------------------------------------------------------------+
+//| Draw Fibonacci Levels                                            |
+//+------------------------------------------------------------------+
+void DrawFibonacciLevels(datetime currentTime, double rsi, double atr)
+{
+    //--- Delete old Fibonacci objects
+    DeleteObjectsByPrefix("Fib");
+    
+    //--- Arrays for Fibonacci periods and colors
+    int periods[5] = {8, 13, 21, 34, 55};
+    color colors[5] = {InpC_F8, InpC_F13, InpC_F21, InpC_F34, InpC_F55};
+    
+    //--- Calculate future time for lines
+    datetime futureTime = currentTime + PeriodSeconds() * 60;
+    
+    //--- Track used positions to avoid overlapping labels
+    double usedPositions[];
+    ArrayResize(usedPositions, 0);
+    double minSpacing = atr * 0.5;
+    
+    //--- Draw Fibonacci levels for each period
+    for(int p = 0; p < 5; p++)
+    {
+        int period = periods[p];
+        color lineColor = colors[p];
+        
+        double fibHigh = 0;
+        double fibLow = 0;
+        
+        //--- Get fib values from buffers
+        switch(period)
+        {
+            case 8:
+                fibHigh = Fib8HighBuffer[0];
+                fibLow = Fib8LowBuffer[0];
+                break;
+            case 13:
+                fibHigh = Fib13HighBuffer[0];
+                fibLow = Fib13LowBuffer[0];
+                break;
+            case 21:
+                fibHigh = Fib21HighBuffer[0];
+                fibLow = Fib21LowBuffer[0];
+                break;
+            case 34:
+                fibHigh = Fib34HighBuffer[0];
+                fibLow = Fib34LowBuffer[0];
+                break;
+            case 55:
+                fibHigh = Fib55HighBuffer[0];
+                fibLow = Fib55LowBuffer[0];
+                break;
+        }
+        
+        if(fibHigh == 0 || fibLow == 0)
+            continue;
+        
+        //--- Create high line
+        string highLineName = "FibHigh_" + IntegerToString(period);
+        if(ObjectCreate(0, highLineName, OBJ_TREND, 0, currentTime, fibHigh, futureTime, fibHigh))
+        {
+            ObjectSetInteger(0, highLineName, OBJPROP_COLOR, lineColor);
+            ObjectSetInteger(0, highLineName, OBJPROP_STYLE, STYLE_DOT);
+            ObjectSetInteger(0, highLineName, OBJPROP_WIDTH, 1);
+            ObjectSetInteger(0, highLineName, OBJPROP_RAY_RIGHT, true);
+            ObjectSetInteger(0, highLineName, OBJPROP_BACK, true);
+            ObjectSetInteger(0, highLineName, OBJPROP_SELECTABLE, false);
+        }
+        
+        //--- Create low line
+        string lowLineName = "FibLow_" + IntegerToString(period);
+        if(ObjectCreate(0, lowLineName, OBJ_TREND, 0, currentTime, fibLow, futureTime, fibLow))
+        {
+            ObjectSetInteger(0, lowLineName, OBJPROP_COLOR, lineColor);
+            ObjectSetInteger(0, lowLineName, OBJPROP_STYLE, STYLE_DOT);
+            ObjectSetInteger(0, lowLineName, OBJPROP_WIDTH, 1);
+            ObjectSetInteger(0, lowLineName, OBJPROP_RAY_RIGHT, true);
+            ObjectSetInteger(0, lowLineName, OBJPROP_BACK, true);
+            ObjectSetInteger(0, lowLineName, OBJPROP_SELECTABLE, false);
+        }
+        
+        //--- Create labels for high level
+        bool canPlaceHighLabel = true;
+        for(int u = 0; u < ArraySize(usedPositions); u++)
+        {
+            if(MathAbs(fibHigh - usedPositions[u]) < minSpacing)
+            {
+                canPlaceHighLabel = false;
+                break;
+            }
+        }
+        
+        if(canPlaceHighLabel)
+        {
+            string highLabelName = "FibHighLabel_" + IntegerToString(period);
+            string labelText = "F" + IntegerToString(period) + " - RSI:" + DoubleToString(rsi, 1);
+            
+            if(ObjectCreate(0, highLabelName, OBJ_TEXT, 0, futureTime, fibHigh))
+            {
+                ObjectSetString(0, highLabelName, OBJPROP_TEXT, labelText);
+                ObjectSetInteger(0, highLabelName, OBJPROP_COLOR, lineColor);
+                ObjectSetInteger(0, highLabelName, OBJPROP_FONTSIZE, 8);
+                ObjectSetString(0, highLabelName, OBJPROP_FONT, "Arial");
+                ObjectSetInteger(0, highLabelName, OBJPROP_ANCHOR, ANCHOR_LEFT);
+                ObjectSetInteger(0, highLabelName, OBJPROP_BACK, false);
+                ObjectSetInteger(0, highLabelName, OBJPROP_SELECTABLE, false);
+            }
+            
+            ArrayResize(usedPositions, ArraySize(usedPositions) + 1);
+            usedPositions[ArraySize(usedPositions) - 1] = fibHigh;
+        }
+        
+        //--- Create labels for low level
+        bool canPlaceLowLabel = true;
+        for(int u = 0; u < ArraySize(usedPositions); u++)
+        {
+            if(MathAbs(fibLow - usedPositions[u]) < minSpacing)
+            {
+                canPlaceLowLabel = false;
+                break;
+            }
+        }
+        
+        if(canPlaceLowLabel)
+        {
+            string lowLabelName = "FibLowLabel_" + IntegerToString(period);
+            string labelText = "F" + IntegerToString(period) + " - RSI:" + DoubleToString(rsi, 1);
+            
+            if(ObjectCreate(0, lowLabelName, OBJ_TEXT, 0, futureTime, fibLow))
+            {
+                ObjectSetString(0, lowLabelName, OBJPROP_TEXT, labelText);
+                ObjectSetInteger(0, lowLabelName, OBJPROP_COLOR, lineColor);
+                ObjectSetInteger(0, lowLabelName, OBJPROP_FONTSIZE, 8);
+                ObjectSetString(0, lowLabelName, OBJPROP_FONT, "Arial");
+                ObjectSetInteger(0, lowLabelName, OBJPROP_ANCHOR, ANCHOR_LEFT);
+                ObjectSetInteger(0, lowLabelName, OBJPROP_BACK, false);
+                ObjectSetInteger(0, lowLabelName, OBJPROP_SELECTABLE, false);
+            }
+            
+            ArrayResize(usedPositions, ArraySize(usedPositions) + 1);
+            usedPositions[ArraySize(usedPositions) - 1] = fibLow;
+        }
+    }
+}
+
+//+------------------------------------------------------------------+
+//| Update Dashboard                                                 |
+//+------------------------------------------------------------------+
+void UpdateDashboard(double currentPrice, double currentHigh, double currentLow,
+                    double entropy, double probability, long currentVolume,
+                    double rsi, double trend, double velocity)
+{
+    if(!InpShowDashboard)
+    {
+        Comment("");
+        return;
+    }
+    
+    //--- Determine dashboard position
+    ENUM_BASE_CORNER corner = CORNER_RIGHT_UPPER;
+    switch(InpDashboardPosition)
+    {
+        case 0: corner = CORNER_LEFT_UPPER; break;
+        case 1: corner = CORNER_RIGHT_UPPER; break;
+        case 2: corner = CORNER_LEFT_LOWER; break;
+        case 3: corner = CORNER_RIGHT_LOWER; break;
+    }
+    
+    //--- Build dashboard text
+    string dashText = "";
+    
+    //--- Title
+    dashText += "⇋ Reversal Point Dynamics | " + _Symbol + "\n";
+    dashText += "═══════════════════════════════\n";
+    
+    //--- Probability Score
+    double totalScore = MathMax(g_lastPeakProb, g_lastValleyProb);
+    string quality = totalScore >= 90 ? "EXCEPTIONAL ⭐" : 
+                    totalScore >= 75 ? "STRONG 💪" : 
+                    totalScore >= 60 ? "MODERATE 👍" : 
+                    totalScore >= 30 ? "BUILDING ⚠️" : "WEAK";
+    
+    dashText += "🎯 PROBABILITY: " + DoubleToString(totalScore, 1) + "% - " + quality + "\n";
+    dashText += "───────────────────────────────\n";
+    
+    if(InpDashboardSize >= 1) // Normal or Large
+    {
+        //--- Market Structure
+        dashText += "🌌 MARKET STRUCTURE\n";
+        
+        string trendText = trend > 0 ? "📈 BULL" : "📉 BEAR";
+        dashText += "Trend: " + trendText + "\n";
+        
+        string entropyText = entropy < InpEntropyThreshold ? "🔥 LOW" : 
+                            entropy < 0.8 ? "📊 MED" : "😴 HIGH";
+        dashText += "Entropy: " + entropyText + " (" + DoubleToString(entropy, 2) + ")\n";
+        
+        dashText += "Last Signal: " + g_lastSignalType + "\n";
+        dashText += "Bars Since: " + IntegerToString(g_barsSinceSignal) + "\n";
+        dashText += "───────────────────────────────\n";
+    }
+    
+    if(InpDashboardSize >= 2) // Large
+    {
+        //--- Additional Details
+        dashText += "📊 COMPONENT ANALYSIS\n";
+        dashText += "Peak Conf: " + DoubleToString(g_lastPeakProb, 1) + "%\n";
+        dashText += "Valley Conf: " + DoubleToString(g_lastValleyProb, 1) + "%\n";
+        dashText += "RSI: " + DoubleToString(rsi, 1) + "\n";
+        dashText += "───────────────────────────────\n";
+        
+        //--- Filters
+        dashText += "🛡️ FILTERS\n";
+        dashText += "Predictive: " + (InpPredictiveMode ? "ON ✓" : "OFF ✗") + "\n";
+        dashText += "Live Signals: " + (InpLiveSignalMode ? "ON ✓" : "OFF ✗") + "\n";
+        
+        bool livePending = g_livePeakProb > 0 || g_liveValleyProb > 0;
+        if(livePending)
+        {
+            string liveType = g_livePeakProb > 0 ? "Peak" : "Valley";
+            double liveProb = MathMax(g_livePeakProb, g_liveValleyProb);
+            dashText += "Live Pending: YES (" + liveType + " " + DoubleToString(liveProb, 1) + "%)\n";
+        }
+        else
+        {
+            dashText += "Live Pending: NO\n";
+        }
+    }
+    
+    //--- Display using Comment
+    Comment(dashText);
+}
+
+//+------------------------------------------------------------------+
+//| Create Watermark                                                 |
+//+------------------------------------------------------------------+
+void CreateWatermark()
+{
+    string wmName = "RPD_Watermark";
+    
+    if(ObjectFind(0, wmName) >= 0)
+        return;
+    
+    if(ObjectCreate(0, wmName, OBJ_LABEL, 0, 0, 0))
+    {
+        ObjectSetInteger(0, wmName, OBJPROP_CORNER, CORNER_LEFT_LOWER);
+        ObjectSetInteger(0, wmName, OBJPROP_XDISTANCE, 10);
+        ObjectSetInteger(0, wmName, OBJPROP_YDISTANCE, 25);
+        ObjectSetString(0, wmName, OBJPROP_TEXT, "⇋ Reversal Point Dynamics");
+        ObjectSetInteger(0, wmName, OBJPROP_COLOR, clrLightBlue);
+        ObjectSetInteger(0, wmName, OBJPROP_FONTSIZE, 10);
+        ObjectSetString(0, wmName, OBJPROP_FONT, "Arial");
+        ObjectSetInteger(0, wmName, OBJPROP_SELECTABLE, false);
+        ObjectSetInteger(0, wmName, OBJPROP_SELECTED, false);
+    }
+}
+
+//+------------------------------------------------------------------+
+//| Delete objects by prefix                                         |
+//+------------------------------------------------------------------+
+void DeleteObjectsByPrefix(string prefix)
+{
+    int total = ObjectsTotal(0, 0, -1);
+    for(int i = total - 1; i >= 0; i--)
+    {
+        string objName = ObjectName(0, i, 0, -1);
+        if(StringFind(objName, prefix) == 0)
+        {
+            ObjectDelete(0, objName);
+        }
+    }
+}
+
+//+------------------------------------------------------------------+
+//| Clean up old objects                                             |
+//+------------------------------------------------------------------+
+void CleanupOldObjects(datetime currentTime)
+{
+    int total = ObjectsTotal(0, 0, -1);
+    int barsToKeep = 500;
+    datetime oldestTime = currentTime - PeriodSeconds() * barsToKeep;
+    
+    for(int i = total - 1; i >= 0; i--)
+    {
+        string objName = ObjectName(0, i, 0, -1);
+        
+        if(StringFind(objName, "Peak") == 0 || 
+           StringFind(objName, "Valley") == 0 || 
+           StringFind(objName, "Particle") == 0)
+        {
+            datetime objTime = (datetime)ObjectGetInteger(0, objName, OBJPROP_TIME);
+            if(objTime > 0 && objTime < oldestTime)
+            {
+                ObjectDelete(0, objName);
+            }
+        }
+    }
+}
+
+//+------------------------------------------------------------------+
+//| Delete all chart objects                                         |
+//+------------------------------------------------------------------+
+void DeleteAllChartObjects()
+{
+    int total = ObjectsTotal(0, 0, -1);
+    for(int i = total - 1; i >= 0; i--)
+    {
+        string objName = ObjectName(0, i, 0, -1);
+        
+        if(StringFind(objName, "Peak") == 0 || 
+           StringFind(objName, "Valley") == 0 || 
+           StringFind(objName, "Particle") == 0 ||
+           StringFind(objName, "Fib") == 0 ||
+           StringFind(objName, "Live") == 0 ||
+           StringFind(objName, "RPD_") == 0)
+        {
+            ObjectDelete(0, objName);
+        }
+    }
+}
+
+//+------------------------------------------------------------------+
