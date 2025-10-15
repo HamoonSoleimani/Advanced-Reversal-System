@@ -1,0 +1,827 @@
+//+------------------------------------------------------------------+
+//|                                        ChartPatterns_AQ.mq5      |
+//|                                Copyright 2025, Hamoon Algo Ltd   |
+//|                                                                  |
+//+------------------------------------------------------------------+
+#property copyright "Copyright 2025, Hamoon Algo Ltd"
+#property version   "1.01"
+#property description "Chart Patterns - LL, LH, HH, HL, Double Tops/Bottoms"
+#property description "This Source Code Form is subject to the terms of the Mozilla Public License, v. 2.0."
+#property description "If a copy of the MPL was not distributed with this file,"
+#property description "You can obtain one at https://mozilla.org/MPL/2.0/"
+#property indicator_chart_window
+#property indicator_buffers 2
+#property indicator_plots   2
+
+//--- Plot buffers for signals
+double BuySignalBuffer[];
+double SellSignalBuffer[];
+
+//--- Input parameters
+input group "=== Visibility and Common Styling ==="
+input int    InpShowLast = 3000;                    // Show Last History (Bars)
+input string InpPatternsVisibility = "All";         // Patterns (All/Active/Confirmed/Invalid)
+input int    InpPatternLineWidth = 2;              // Pattern Line Width (1-10)
+input color  InpBearishColor = clrRed;             // Bearish Color
+input color  InpBullishColor = clrLime;            // Bullish Color
+
+input group "=== Pivot Points ==="
+input int    InpPeriod = 10;                       // Period (minimum 2)
+input bool   InpShowPivotHighs = true;             // Show Pivot Highs
+input bool   InpShowPivotLows = true;              // Show Pivot Lows
+input color  InpPivotHighColor = 0xFF5252;         // Pivot Highs Color
+input color  InpPivotLowColor = 0x089981;          // Pivot Lows Color
+
+input group "=== Patterns ==="
+input bool   InpShowLowerLow = true;               // Lower Low
+input bool   InpShowLowerLowLowerHigh = true;      // Lower Low & Lower High
+input bool   InpShowHigherHigh = true;             // Higher High
+input bool   InpShowHigherHighHigherLow = true;    // Higher High & Higher Low
+input bool   InpShowDoubleTops = true;             // Double Tops
+input bool   InpShowDoubleBottoms = true;          // Double Bottoms
+
+input group "=== Trading Signals ==="
+input bool   InpShowBuySignals = true;             // Show Buy Signals (arrows)
+input bool   InpShowSellSignals = true;            // Show Sell Signals (arrows)
+input bool   InpAlertOnSignal = true;              // Alert on New Signal
+
+//--- Structure for pattern information
+struct PatternInfo
+{
+   string   patternType;
+   string   status;
+   int      breakBarIdx;
+   
+   int      p1Idx, p2Idx, p3Idx, p4Idx, p5Idx, p6Idx;
+   double   p1Price, p2Price, p3Price, p4Price, p5Price, p6Price;
+   
+   double   supportSlope;
+   double   resistanceSlope;
+   
+   int      firstConnectingLineBreakIdx;
+   int      lastConnectingLineBreakIdx;
+   int      supportLineBreakIdx;
+   int      resistanceLineBreakIdx;
+   
+   datetime creationTime;
+   int      uniqueID;
+};
+
+//--- Global arrays
+double pivotsPrices[];
+int pivotsBarIndices[];
+PatternInfo activePatterns[];
+
+//--- Global variables
+int lastPivot = 1;
+int phx = 0;
+int plx = 0;
+datetime lastProcessedTime = 0;
+int atrHandle = INVALID_HANDLE;
+int patternCounter = 0;
+bool firstRun = true;
+
+//+------------------------------------------------------------------+
+//| Custom indicator initialization                                   |
+//+------------------------------------------------------------------+
+int OnInit()
+{
+   //--- Validate inputs
+   if(InpPeriod < 2)
+   {
+      Print("Error: Period must be at least 2");
+      return INIT_PARAMETERS_INCORRECT;
+   }
+   
+   if(InpPatternLineWidth < 1 || InpPatternLineWidth > 10)
+   {
+      Print("Error: Pattern Line Width must be between 1 and 10");
+      return INIT_PARAMETERS_INCORRECT;
+   }
+   
+   //--- Set indicator buffers
+   SetIndexBuffer(0, BuySignalBuffer, INDICATOR_DATA);
+   SetIndexBuffer(1, SellSignalBuffer, INDICATOR_DATA);
+   
+   //--- Set plot properties for Buy signals
+   PlotIndexSetInteger(0, PLOT_DRAW_TYPE, DRAW_ARROW);
+   PlotIndexSetInteger(0, PLOT_ARROW, 233);
+   PlotIndexSetInteger(0, PLOT_ARROW_SHIFT, -10);
+   PlotIndexSetInteger(0, PLOT_LINE_COLOR, InpBullishColor);
+   PlotIndexSetInteger(0, PLOT_LINE_WIDTH, 3);
+   PlotIndexSetString(0, PLOT_LABEL, "Buy Signal");
+   
+   //--- Set plot properties for Sell signals
+   PlotIndexSetInteger(1, PLOT_DRAW_TYPE, DRAW_ARROW);
+   PlotIndexSetInteger(1, PLOT_ARROW, 234);
+   PlotIndexSetInteger(1, PLOT_ARROW_SHIFT, 10);
+   PlotIndexSetInteger(1, PLOT_LINE_COLOR, InpBearishColor);
+   PlotIndexSetInteger(1, PLOT_LINE_WIDTH, 3);
+   PlotIndexSetString(1, PLOT_LABEL, "Sell Signal");
+   
+   //--- Initialize arrays
+   ArrayResize(pivotsPrices, 0);
+   ArrayResize(pivotsBarIndices, 0);
+   ArrayResize(activePatterns, 0);
+   
+   //--- Set arrays as series
+   ArraySetAsSeries(BuySignalBuffer, true);
+   ArraySetAsSeries(SellSignalBuffer, true);
+   
+   //--- Initialize signal buffers
+   ArrayInitialize(BuySignalBuffer, EMPTY_VALUE);
+   ArrayInitialize(SellSignalBuffer, EMPTY_VALUE);
+   
+   //--- Create ATR handle
+   atrHandle = iATR(_Symbol, PERIOD_CURRENT, 14);
+   if(atrHandle == INVALID_HANDLE)
+   {
+      Print("Error creating ATR indicator: ", GetLastError());
+      return INIT_FAILED;
+   }
+   
+   //--- Set indicator name
+   IndicatorSetString(INDICATOR_SHORTNAME, "Chart Patterns [ActiveQuants]");
+   
+   //--- Initialize global variables
+   lastProcessedTime = 0;
+   patternCounter = 0;
+   firstRun = true;
+   
+   Print("Chart Patterns indicator initialized successfully");
+   
+   return INIT_SUCCEEDED;
+}
+
+//+------------------------------------------------------------------+
+//| Custom indicator deinitialization                                |
+//+------------------------------------------------------------------+
+void OnDeinit(const int reason)
+{
+   //--- Delete all chart objects created by indicator
+   ObjectsDeleteAll(0, "ChartPattern_");
+   ObjectsDeleteAll(0, "Pivot_");
+   
+   //--- Release ATR handle
+   if(atrHandle != INVALID_HANDLE)
+      IndicatorRelease(atrHandle);
+   
+   //--- Clear arrays
+   ArrayFree(pivotsPrices);
+   ArrayFree(pivotsBarIndices);
+   ArrayFree(activePatterns);
+   
+   Print("Chart Patterns indicator removed");
+}
+
+//+------------------------------------------------------------------+
+//| Custom indicator iteration                                        |
+//+------------------------------------------------------------------+
+int OnCalculate(const int rates_total,
+                const int prev_calculated,
+                const datetime &time[],
+                const double &open[],
+                const double &high[],
+                const double &low[],
+                const double &close[],
+                const long &tick_volume[],
+                const long &volume[],
+                const int &spread[])
+{
+   //--- Check if we have enough bars
+   if(rates_total < InpPeriod * 2 + 1)
+      return 0;
+   
+   //--- Set arrays as series
+   ArraySetAsSeries(time, true);
+   ArraySetAsSeries(high, true);
+   ArraySetAsSeries(low, true);
+   ArraySetAsSeries(close, true);
+   
+   //--- On first run or recalculation, process all bars
+   int start = 0;
+   if(firstRun || prev_calculated == 0)
+   {
+      ArrayInitialize(BuySignalBuffer, EMPTY_VALUE);
+      ArrayInitialize(SellSignalBuffer, EMPTY_VALUE);
+      
+      ArrayResize(pivotsPrices, 0);
+      ArrayResize(pivotsBarIndices, 0);
+      ArrayResize(activePatterns, 0);
+      
+      ObjectsDeleteAll(0, "ChartPattern_");
+      ObjectsDeleteAll(0, "Pivot_");
+      
+      lastPivot = 1;
+      patternCounter = 0;
+      firstRun = false;
+      start = rates_total - InpPeriod * 2 - 1;
+      
+      Print("Starting full recalculation from bar ", start);
+   }
+   else
+   {
+      start = InpPeriod;
+   }
+   
+   //--- Main calculation loop
+   for(int shift = start; shift >= InpPeriod; shift--)
+   {
+      double ph = EMPTY_VALUE, pl = EMPTY_VALUE;
+      int currentPhx = 0, currentPlx = 0;
+      bool newPivotDetected = false;
+      
+      //--- Get pivot points
+      GetPivotPoints(InpPeriod, shift, high, low, rates_total, ph, currentPhx, pl, currentPlx, newPivotDetected);
+      
+      //--- Draw pivot points
+      if(InpShowPivotHighs && ph != EMPTY_VALUE && currentPhx > 0)
+         DrawPivotPoint(currentPhx, ph, true, rates_total);
+      
+      if(InpShowPivotLows && pl != EMPTY_VALUE && currentPlx > 0)
+         DrawPivotPoint(currentPlx, pl, false, rates_total);
+      
+      //--- Pattern detection when new pivot is detected
+      if(newPivotDetected && ArraySize(pivotsPrices) >= 6)
+      {
+         DetectPatterns(rates_total, close, high, low, shift);
+      }
+   }
+   
+   //--- Update active patterns status
+   UpdateActivePatterns(close, rates_total);
+   
+   //--- Clean old patterns
+   CleanOldPatterns(rates_total);
+   
+   //--- Update last processed time
+   lastProcessedTime = time[0];
+   
+   return rates_total;
+}
+
+//+------------------------------------------------------------------+
+//| Get pivot points                                                  |
+//+------------------------------------------------------------------+
+void GetPivotPoints(int period, int shift, const double &high[], const double &low[], int rates_total,
+                    double &ph, int &currentPhx, double &pl, int &currentPlx, bool &newPivotDetected)
+{
+   if(rates_total < period * 2 + 1 || shift < period)
+      return;
+   
+   double upper = high[shift];
+   double lower = low[shift];
+   bool isHigh = true;
+   bool isLow = true;
+   
+   //--- Check left and right bars for pivot high
+   for(int i = 1; i <= period; i++)
+   {
+      if(high[shift - i] >= upper) isHigh = false;
+      if(high[shift + i] >= upper) isHigh = false;
+      if(low[shift - i] <= lower) isLow = false;
+      if(low[shift + i] <= lower) isLow = false;
+   }
+   
+   //--- Check for pivot high
+   if(isHigh && upper > 0)
+   {
+      if(lastPivot != 1)
+      {
+         ph = upper;
+         currentPhx = rates_total - 1 - shift;
+         phx = currentPhx;
+         
+         int size = ArraySize(pivotsPrices);
+         ArrayResize(pivotsPrices, size + 1);
+         ArrayResize(pivotsBarIndices, size + 1);
+         pivotsPrices[size] = ph;
+         pivotsBarIndices[size] = currentPhx;
+         
+         newPivotDetected = true;
+         lastPivot = 1;
+         
+         Print("Pivot High detected at bar ", currentPhx, " price ", ph);
+      }
+   }
+   //--- Check for pivot low
+   else if(isLow && lower > 0)
+   {
+      if(lastPivot != -1)
+      {
+         pl = lower;
+         currentPlx = rates_total - 1 - shift;
+         plx = currentPlx;
+         
+         int size = ArraySize(pivotsPrices);
+         ArrayResize(pivotsPrices, size + 1);
+         ArrayResize(pivotsBarIndices, size + 1);
+         pivotsPrices[size] = pl;
+         pivotsBarIndices[size] = currentPlx;
+         
+         newPivotDetected = true;
+         lastPivot = -1;
+         
+         Print("Pivot Low detected at bar ", currentPlx, " price ", pl);
+      }
+   }
+}
+
+//+------------------------------------------------------------------+
+//| Draw pivot point                                                  |
+//+------------------------------------------------------------------+
+void DrawPivotPoint(int idx, double price, bool isHigh, int rates_total)
+{
+   if(idx < 0 || idx >= rates_total) return;
+   
+   string name = "Pivot_" + (isHigh ? "High_" : "Low_") + IntegerToString(idx);
+   datetime pivotTime = iTime(_Symbol, PERIOD_CURRENT, rates_total - 1 - idx);
+   
+   if(pivotTime == 0) return;
+   
+   if(ObjectFind(0, name) >= 0)
+      ObjectDelete(0, name);
+   
+   if(ObjectCreate(0, name, OBJ_ARROW, 0, pivotTime, price))
+   {
+      ObjectSetInteger(0, name, OBJPROP_ARROWCODE, 159);
+      ObjectSetInteger(0, name, OBJPROP_COLOR, isHigh ? InpPivotHighColor : InpPivotLowColor);
+      ObjectSetInteger(0, name, OBJPROP_WIDTH, 2);
+      ObjectSetInteger(0, name, OBJPROP_BACK, false);
+      ObjectSetInteger(0, name, OBJPROP_SELECTABLE, false);
+      ObjectSetInteger(0, name, OBJPROP_HIDDEN, true);
+   }
+}
+
+//+------------------------------------------------------------------+
+//| Detect all patterns                                               |
+//+------------------------------------------------------------------+
+void DetectPatterns(int rates_total, const double &close[], const double &high[], const double &low[], int shift)
+{
+   int size = ArraySize(pivotsPrices);
+   if(size < 6) return;
+   
+   int i1 = pivotsBarIndices[size - 6];
+   int i2 = pivotsBarIndices[size - 5];
+   int i3 = pivotsBarIndices[size - 4];
+   int i4 = pivotsBarIndices[size - 3];
+   int i5 = pivotsBarIndices[size - 2];
+   int i6 = pivotsBarIndices[size - 1];
+   
+   double p1 = pivotsPrices[size - 6];
+   double p2 = pivotsPrices[size - 5];
+   double p3 = pivotsPrices[size - 4];
+   double p4 = pivotsPrices[size - 3];
+   double p5 = pivotsPrices[size - 2];
+   double p6 = pivotsPrices[size - 1];
+   
+   //--- Get ATR
+   double atr[];
+   ArraySetAsSeries(atr, true);
+   if(CopyBuffer(atrHandle, 0, 0, 1, atr) <= 0)
+   {
+      Print("Error copying ATR buffer: ", GetLastError());
+      return;
+   }
+   
+   //--- Check Lower Low
+   if(InpShowLowerLow && CheckLowerLow(p2, p3, p4, p5, p6))
+   {
+      Print("Lower Low pattern detected");
+      CreatePattern("LL", "Confirmed", i1, i2, i3, i4, i5, i6, p1, p2, p3, p4, p5, p6, rates_total);
+      if(InpShowSellSignals && shift == InpPeriod)
+      {
+         SellSignalBuffer[shift] = high[shift] + atr[0] * 0.5;
+         if(InpAlertOnSignal)
+            Alert("SELL Signal: Lower Low pattern detected on ", _Symbol, " ", EnumToString(PERIOD_CURRENT));
+      }
+   }
+   
+   //--- Check Lower Low & Lower High
+   if(InpShowLowerLowLowerHigh && CheckLowerLowLowerHigh(p1, p2, p3, p4, p5, p6))
+   {
+      Print("Lower Low & Lower High pattern detected");
+      CreatePattern("LL & LH", "Confirmed", i1, i2, i3, i4, i5, i6, p1, p2, p3, p4, p5, p6, rates_total);
+      if(InpShowSellSignals && shift == InpPeriod)
+      {
+         SellSignalBuffer[shift] = high[shift] + atr[0] * 0.5;
+         if(InpAlertOnSignal)
+            Alert("SELL Signal: Lower Low & Lower High pattern detected on ", _Symbol, " ", EnumToString(PERIOD_CURRENT));
+      }
+   }
+   
+   //--- Check Higher High
+   if(InpShowHigherHigh && CheckHigherHigh(p2, p3, p4, p5, p6))
+   {
+      Print("Higher High pattern detected");
+      CreatePattern("HH", "Confirmed", i1, i2, i3, i4, i5, i6, p1, p2, p3, p4, p5, p6, rates_total);
+      if(InpShowBuySignals && shift == InpPeriod)
+      {
+         BuySignalBuffer[shift] = low[shift] - atr[0] * 0.5;
+         if(InpAlertOnSignal)
+            Alert("BUY Signal: Higher High pattern detected on ", _Symbol, " ", EnumToString(PERIOD_CURRENT));
+      }
+   }
+   
+   //--- Check Higher High & Higher Low
+   if(InpShowHigherHighHigherLow && CheckHigherHighHigherLow(p1, p2, p3, p4, p5, p6))
+   {
+      Print("Higher High & Higher Low pattern detected");
+      CreatePattern("HH & HL", "Confirmed", i1, i2, i3, i4, i5, i6, p1, p2, p3, p4, p5, p6, rates_total);
+      if(InpShowBuySignals && shift == InpPeriod)
+      {
+         BuySignalBuffer[shift] = low[shift] - atr[0] * 0.5;
+         if(InpAlertOnSignal)
+            Alert("BUY Signal: Higher High & Higher Low pattern detected on ", _Symbol, " ", EnumToString(PERIOD_CURRENT));
+      }
+   }
+   
+   //--- Check Double Top
+   if(InpShowDoubleTops && CheckDoubleTop(p2, p3, p4, i1, i4, atr[0], close, rates_total))
+   {
+      Print("Double Top pattern detected");
+      CreateDoubleTopPattern(i1, i2, i3, i4, i5, i6, p1, p2, p3, p4, p5, p6, rates_total, close);
+      if(InpShowSellSignals && shift == InpPeriod)
+      {
+         SellSignalBuffer[shift] = high[shift] + atr[0] * 0.5;
+         if(InpAlertOnSignal)
+            Alert("SELL Signal: Double Top pattern detected on ", _Symbol, " ", EnumToString(PERIOD_CURRENT));
+      }
+   }
+   
+   //--- Check Double Bottom
+   if(InpShowDoubleBottoms && CheckDoubleBottom(p2, p3, p4, i1, i4, atr[0], close, rates_total))
+   {
+      Print("Double Bottom pattern detected");
+      CreateDoubleBottomPattern(i1, i2, i3, i4, i5, i6, p1, p2, p3, p4, p5, p6, rates_total, close);
+      if(InpShowBuySignals && shift == InpPeriod)
+      {
+         BuySignalBuffer[shift] = low[shift] - atr[0] * 0.5;
+         if(InpAlertOnSignal)
+            Alert("BUY Signal: Double Bottom pattern detected on ", _Symbol, " ", EnumToString(PERIOD_CURRENT));
+      }
+   }
+}
+
+//+------------------------------------------------------------------+
+//| Pattern recognition functions                                     |
+//+------------------------------------------------------------------+
+bool CheckLowerLow(double p2, double p3, double p4, double p5, double p6)
+{
+   return (p2 < p3 && p2 < p4 &&
+           p3 > p4 && p3 < p5 &&
+           p4 < p5 &&
+           p5 > p6 &&
+           p6 < p4);
+}
+
+bool CheckLowerLowLowerHigh(double p1, double p2, double p3, double p4, double p5, double p6)
+{
+   return (p1 < p2 && p1 < p3 &&
+           p2 > p3 && p2 < p4 &&
+           p3 < p4 &&
+           p4 > p5 && p4 > p6 &&
+           p5 < p3 && p5 < p6);
+}
+
+bool CheckHigherHigh(double p2, double p3, double p4, double p5, double p6)
+{
+   return (p2 > p3 && p2 > p4 &&
+           p3 < p4 && p3 > p5 &&
+           p4 > p5 &&
+           p5 < p6 &&
+           p6 > p4);
+}
+
+bool CheckHigherHighHigherLow(double p1, double p2, double p3, double p4, double p5, double p6)
+{
+   return (p1 > p2 && p1 > p3 &&
+           p2 < p3 && p2 > p4 &&
+           p3 > p4 &&
+           p4 < p5 && p4 < p6 &&
+           p5 > p3 && p5 > p6);
+}
+
+bool CheckDoubleTop(double p2, double p3, double p4, int p1Idx, int p4Idx, double atr,
+                    const double &close[], int rates_total)
+{
+   int closeIdx = rates_total - 1 - p1Idx;
+   if(closeIdx < 0 || closeIdx >= rates_total) return false;
+   
+   return (close[closeIdx] < p3 && p2 > p3 && p4 > p3 && MathAbs(p2 - p4) <= atr / 6);
+}
+
+bool CheckDoubleBottom(double p2, double p3, double p4, int p1Idx, int p4Idx, double atr,
+                       const double &close[], int rates_total)
+{
+   int closeIdx = rates_total - 1 - p1Idx;
+   if(closeIdx < 0 || closeIdx >= rates_total) return false;
+   
+   return (close[closeIdx] > p3 && p2 < p3 && p4 < p3 && MathAbs(p2 - p4) <= atr / 6);
+}
+
+//+------------------------------------------------------------------+
+//| Create pattern                                                    |
+//+------------------------------------------------------------------+
+void CreatePattern(string patternType, string status,
+                   int i1, int i2, int i3, int i4, int i5, int i6,
+                   double p1, double p2, double p3, double p4, double p5, double p6,
+                   int rates_total)
+{
+   int patternIdx = ArraySize(activePatterns);
+   ArrayResize(activePatterns, patternIdx + 1);
+   
+   patternCounter++;
+   
+   activePatterns[patternIdx].patternType = patternType;
+   activePatterns[patternIdx].status = status;
+   activePatterns[patternIdx].p1Idx = i1;
+   activePatterns[patternIdx].p2Idx = i2;
+   activePatterns[patternIdx].p3Idx = i3;
+   activePatterns[patternIdx].p4Idx = i4;
+   activePatterns[patternIdx].p5Idx = i5;
+   activePatterns[patternIdx].p6Idx = i6;
+   activePatterns[patternIdx].p1Price = p1;
+   activePatterns[patternIdx].p2Price = p2;
+   activePatterns[patternIdx].p3Price = p3;
+   activePatterns[patternIdx].p4Price = p4;
+   activePatterns[patternIdx].p5Price = p5;
+   activePatterns[patternIdx].p6Price = p6;
+   activePatterns[patternIdx].creationTime = TimeCurrent();
+   activePatterns[patternIdx].uniqueID = patternCounter;
+   
+   color lineColor = (patternType == "LL" || patternType == "LL & LH") ? InpBearishColor : InpBullishColor;
+   
+   DrawPatternLines(patternIdx, lineColor, rates_total);
+   DrawPatternLabel(patternIdx, rates_total);
+   
+   Print("Pattern created: ", patternType, " ID: ", patternCounter);
+}
+
+void CreateDoubleTopPattern(int i1, int i2, int i3, int i4, int i5, int i6,
+                            double p1, double p2, double p3, double p4, double p5, double p6,
+                            int rates_total, const double &close[])
+{
+   int patternIdx = ArraySize(activePatterns);
+   ArrayResize(activePatterns, patternIdx + 1);
+   
+   patternCounter++;
+   
+   activePatterns[patternIdx].patternType = "Double Top";
+   activePatterns[patternIdx].status = "Active";
+   activePatterns[patternIdx].p1Idx = i1;
+   activePatterns[patternIdx].p2Idx = i2;
+   activePatterns[patternIdx].p3Idx = i3;
+   activePatterns[patternIdx].p4Idx = i4;
+   activePatterns[patternIdx].p5Idx = i5;
+   activePatterns[patternIdx].p6Idx = i6;
+   activePatterns[patternIdx].p1Price = p1;
+   activePatterns[patternIdx].p2Price = p2;
+   activePatterns[patternIdx].p3Price = p3;
+   activePatterns[patternIdx].p4Price = p4;
+   activePatterns[patternIdx].p5Price = p5;
+   activePatterns[patternIdx].p6Price = p6;
+   activePatterns[patternIdx].creationTime = TimeCurrent();
+   activePatterns[patternIdx].uniqueID = patternCounter;
+   
+   DrawDoubleTopBottomPattern(patternIdx, true, rates_total);
+   
+   Print("Double Top pattern created, ID: ", patternCounter);
+}
+
+void CreateDoubleBottomPattern(int i1, int i2, int i3, int i4, int i5, int i6,
+                               double p1, double p2, double p3, double p4, double p5, double p6,
+                               int rates_total, const double &close[])
+{
+   int patternIdx = ArraySize(activePatterns);
+   ArrayResize(activePatterns, patternIdx + 1);
+   
+   patternCounter++;
+   
+   activePatterns[patternIdx].patternType = "Double Bottom";
+   activePatterns[patternIdx].status = "Active";
+   activePatterns[patternIdx].p1Idx = i1;
+   activePatterns[patternIdx].p2Idx = i2;
+   activePatterns[patternIdx].p3Idx = i3;
+   activePatterns[patternIdx].p4Idx = i4;
+   activePatterns[patternIdx].p5Idx = i5;
+   activePatterns[patternIdx].p6Idx = i6;
+   activePatterns[patternIdx].p1Price = p1;
+   activePatterns[patternIdx].p2Price = p2;
+   activePatterns[patternIdx].p3Price = p3;
+   activePatterns[patternIdx].p4Price = p4;
+   activePatterns[patternIdx].p5Price = p5;
+   activePatterns[patternIdx].p6Price = p6;
+   activePatterns[patternIdx].creationTime = TimeCurrent();
+   activePatterns[patternIdx].uniqueID = patternCounter;
+   
+   DrawDoubleTopBottomPattern(patternIdx, false, rates_total);
+   
+   Print("Double Bottom pattern created, ID: ", patternCounter);
+}
+
+//+------------------------------------------------------------------+
+//| Draw pattern lines                                                |
+//+------------------------------------------------------------------+
+void DrawPatternLines(int patternIdx, color lineColor, int rates_total)
+{
+   string patternType = activePatterns[patternIdx].patternType;
+   int uniqueID = activePatterns[patternIdx].uniqueID;
+   string prefix = "ChartPattern_Line_" + IntegerToString(uniqueID) + "_";
+   
+   if(patternType == "LL")
+   {
+      DrawLine(prefix + "1", activePatterns[patternIdx].p2Idx, activePatterns[patternIdx].p2Price, 
+               activePatterns[patternIdx].p3Idx, activePatterns[patternIdx].p3Price, lineColor, rates_total);
+      DrawLine(prefix + "2", activePatterns[patternIdx].p3Idx, activePatterns[patternIdx].p3Price, 
+               activePatterns[patternIdx].p4Idx, activePatterns[patternIdx].p4Price, lineColor, rates_total);
+      DrawLine(prefix + "3", activePatterns[patternIdx].p4Idx, activePatterns[patternIdx].p4Price, 
+               activePatterns[patternIdx].p5Idx, activePatterns[patternIdx].p5Price, lineColor, rates_total);
+      DrawLine(prefix + "4", activePatterns[patternIdx].p5Idx, activePatterns[patternIdx].p5Price, 
+               activePatterns[patternIdx].p6Idx, activePatterns[patternIdx].p6Price, lineColor, rates_total);
+   }
+   else if(patternType == "LL & LH" || patternType == "HH & HL")
+   {
+      DrawLine(prefix + "1", activePatterns[patternIdx].p1Idx, activePatterns[patternIdx].p1Price, 
+               activePatterns[patternIdx].p2Idx, activePatterns[patternIdx].p2Price, lineColor, rates_total);
+      DrawLine(prefix + "2", activePatterns[patternIdx].p2Idx, activePatterns[patternIdx].p2Price, 
+               activePatterns[patternIdx].p3Idx, activePatterns[patternIdx].p3Price, lineColor, rates_total);
+      DrawLine(prefix + "3", activePatterns[patternIdx].p3Idx, activePatterns[patternIdx].p3Price, 
+               activePatterns[patternIdx].p4Idx, activePatterns[patternIdx].p4Price, lineColor, rates_total);
+      DrawLine(prefix + "4", activePatterns[patternIdx].p4Idx, activePatterns[patternIdx].p4Price, 
+               activePatterns[patternIdx].p5Idx, activePatterns[patternIdx].p5Price, lineColor, rates_total);
+      DrawLine(prefix + "5", activePatterns[patternIdx].p5Idx, activePatterns[patternIdx].p5Price, 
+               activePatterns[patternIdx].p6Idx, activePatterns[patternIdx].p6Price, lineColor, rates_total);
+   }
+   else if(patternType == "HH")
+   {
+      DrawLine(prefix + "1", activePatterns[patternIdx].p2Idx, activePatterns[patternIdx].p2Price, 
+               activePatterns[patternIdx].p3Idx, activePatterns[patternIdx].p3Price, lineColor, rates_total);
+      DrawLine(prefix + "2", activePatterns[patternIdx].p3Idx, activePatterns[patternIdx].p3Price, 
+               activePatterns[patternIdx].p4Idx, activePatterns[patternIdx].p4Price, lineColor, rates_total);
+      DrawLine(prefix + "3", activePatterns[patternIdx].p4Idx, activePatterns[patternIdx].p4Price, 
+               activePatterns[patternIdx].p5Idx, activePatterns[patternIdx].p5Price, lineColor, rates_total);
+      DrawLine(prefix + "4", activePatterns[patternIdx].p5Idx, activePatterns[patternIdx].p5Price, 
+               activePatterns[patternIdx].p6Idx, activePatterns[patternIdx].p6Price, lineColor, rates_total);
+   }
+}
+
+void DrawDoubleTopBottomPattern(int patternIdx, bool isTop, int rates_total)
+{
+   int uniqueID = activePatterns[patternIdx].uniqueID;
+   string prefix = "ChartPattern_DT_" + IntegerToString(uniqueID) + "_";
+   color lineColor = isTop ? InpBearishColor : InpBullishColor;
+   
+   DrawLine(prefix + "1", activePatterns[patternIdx].p3Idx, activePatterns[patternIdx].p3Price, 
+            activePatterns[patternIdx].p4Idx, activePatterns[patternIdx].p4Price, lineColor, rates_total);
+   DrawLine(prefix + "2", activePatterns[patternIdx].p4Idx, activePatterns[patternIdx].p4Price, 
+            activePatterns[patternIdx].p5Idx, activePatterns[patternIdx].p5Price, lineColor, rates_total);
+   DrawLine(prefix + "3", activePatterns[patternIdx].p5Idx, activePatterns[patternIdx].p5Price, 
+            activePatterns[patternIdx].p6Idx, activePatterns[patternIdx].p6Price, lineColor, rates_total);
+   
+   int currentBar = 0;
+   datetime t6 = iTime(_Symbol, PERIOD_CURRENT, rates_total - 1 - activePatterns[patternIdx].p6Idx);
+   datetime tCurrent = iTime(_Symbol, PERIOD_CURRENT, currentBar);
+   
+   DrawLine(prefix + "neckline", activePatterns[patternIdx].p6Idx, activePatterns[patternIdx].p5Price, 
+            currentBar, activePatterns[patternIdx].p5Price, lineColor, rates_total, STYLE_DOT);
+   
+   datetime t4 = iTime(_Symbol, PERIOD_CURRENT, rates_total - 1 - activePatterns[patternIdx].p4Idx);
+   
+   string label1 = prefix + "Label1";
+   string label2 = prefix + "Label2";
+   
+   if(ObjectFind(0, label1) >= 0) ObjectDelete(0, label1);
+   if(ObjectFind(0, label2) >= 0) ObjectDelete(0, label2);
+   
+   ObjectCreate(0, label1, OBJ_TEXT, 0, t4, activePatterns[patternIdx].p4Price);
+   ObjectSetString(0, label1, OBJPROP_TEXT, isTop ? "Top 1" : "Bottom 1");
+   ObjectSetInteger(0, label1, OBJPROP_COLOR, lineColor);
+   ObjectSetInteger(0, label1, OBJPROP_FONTSIZE, 8);
+   ObjectSetInteger(0, label1, OBJPROP_ANCHOR, ANCHOR_CENTER);
+   ObjectSetInteger(0, label1, OBJPROP_BACK, false);
+   ObjectSetInteger(0, label1, OBJPROP_SELECTABLE, false);
+   ObjectSetInteger(0, label1, OBJPROP_HIDDEN, true);
+   
+   ObjectCreate(0, label2, OBJ_TEXT, 0, t6, activePatterns[patternIdx].p6Price);
+   ObjectSetString(0, label2, OBJPROP_TEXT, isTop ? "Top 2" : "Bottom 2");
+   ObjectSetInteger(0, label2, OBJPROP_COLOR, lineColor);
+   ObjectSetInteger(0, label2, OBJPROP_FONTSIZE, 8);
+   ObjectSetInteger(0, label2, OBJPROP_ANCHOR, ANCHOR_CENTER);
+   ObjectSetInteger(0, label2, OBJPROP_BACK, false);
+   ObjectSetInteger(0, label2, OBJPROP_SELECTABLE, false);
+   ObjectSetInteger(0, label2, OBJPROP_HIDDEN, true);
+   
+   DrawPatternLabel(patternIdx, rates_total);
+}
+
+void DrawPatternLabel(int patternIdx, int rates_total)
+{
+   datetime labelTime = iTime(_Symbol, PERIOD_CURRENT, rates_total - 1 - activePatterns[patternIdx].p6Idx);
+   int uniqueID = activePatterns[patternIdx].uniqueID;
+   string labelName = "ChartPattern_MainLabel_" + IntegerToString(uniqueID);
+   
+   string patternType = activePatterns[patternIdx].patternType;
+   color labelColor = (patternType == "LL" || patternType == "LL & LH" || patternType == "Double Top") ? 
+                      InpBearishColor : InpBullishColor;
+   ENUM_ANCHOR_POINT anchor = (patternType == "LL" || patternType == "LL & LH" || patternType == "Double Top") ? 
+                              ANCHOR_UPPER : ANCHOR_LOWER;
+   
+   if(ObjectFind(0, labelName) >= 0)
+      ObjectDelete(0, labelName);
+   
+   ObjectCreate(0, labelName, OBJ_TEXT, 0, labelTime, activePatterns[patternIdx].p6Price);
+   ObjectSetString(0, labelName, OBJPROP_TEXT, patternType);
+   ObjectSetInteger(0, labelName, OBJPROP_COLOR, labelColor);
+   ObjectSetInteger(0, labelName, OBJPROP_FONTSIZE, 10);
+   ObjectSetInteger(0, labelName, OBJPROP_ANCHOR, anchor);
+   ObjectSetInteger(0, labelName, OBJPROP_BACK, false);
+   ObjectSetInteger(0, labelName, OBJPROP_SELECTABLE, false);
+   ObjectSetInteger(0, labelName, OBJPROP_HIDDEN, true);
+}
+
+void DrawLine(string name, int idx1, double price1, int idx2, double price2, 
+              color lineColor, int rates_total, ENUM_LINE_STYLE style = STYLE_SOLID)
+{
+   if(idx1 < 0 || idx2 < 0 || idx1 >= rates_total || idx2 >= rates_total)
+      return;
+   
+   datetime time1 = iTime(_Symbol, PERIOD_CURRENT, rates_total - 1 - idx1);
+   datetime time2 = iTime(_Symbol, PERIOD_CURRENT, rates_total - 1 - idx2);
+   
+   if(time1 == 0 || time2 == 0)
+      return;
+   
+   if(ObjectFind(0, name) >= 0)
+      ObjectDelete(0, name);
+   
+   if(ObjectCreate(0, name, OBJ_TREND, 0, time1, price1, time2, price2))
+   {
+      ObjectSetInteger(0, name, OBJPROP_COLOR, lineColor);
+      ObjectSetInteger(0, name, OBJPROP_WIDTH, InpPatternLineWidth);
+      ObjectSetInteger(0, name, OBJPROP_STYLE, style);
+      ObjectSetInteger(0, name, OBJPROP_RAY_RIGHT, false);
+      ObjectSetInteger(0, name, OBJPROP_BACK, false);
+      ObjectSetInteger(0, name, OBJPROP_SELECTABLE, false);
+      ObjectSetInteger(0, name, OBJPROP_HIDDEN, true);
+   }
+}
+
+//+------------------------------------------------------------------+
+//| Update active patterns                                            |
+//+------------------------------------------------------------------+
+void UpdateActivePatterns(const double &close[], int rates_total)
+{
+   for(int i = 0; i < ArraySize(activePatterns); i++)
+   {
+      if(activePatterns[i].patternType == "Double Top" && activePatterns[i].status == "Active")
+      {
+         if(close[0] < activePatterns[i].p5Price)
+         {
+            activePatterns[i].status = "Confirmed";
+            activePatterns[i].lastConnectingLineBreakIdx = rates_total - 1;
+            Print("Double Top confirmed for ID: ", activePatterns[i].uniqueID);
+         }
+      }
+      else if(activePatterns[i].patternType == "Double Bottom" && activePatterns[i].status == "Active")
+      {
+         if(close[0] > activePatterns[i].p5Price)
+         {
+            activePatterns[i].status = "Confirmed";
+            activePatterns[i].lastConnectingLineBreakIdx = rates_total - 1;
+            Print("Double Bottom confirmed for ID: ", activePatterns[i].uniqueID);
+         }
+      }
+   }
+}
+
+//+------------------------------------------------------------------+
+//| Clean old patterns                                                |
+//+------------------------------------------------------------------+
+void CleanOldPatterns(int rates_total)
+{
+   int currentBar = rates_total - 1;
+   
+   for(int i = ArraySize(activePatterns) - 1; i >= 0; i--)
+   {
+      if(currentBar - activePatterns[i].p1Idx > InpShowLast)
+      {
+         int uniqueID = activePatterns[i].uniqueID;
+         string prefix1 = "ChartPattern_Line_" + IntegerToString(uniqueID);
+         string prefix2 = "ChartPattern_DT_" + IntegerToString(uniqueID);
+         string labelName = "ChartPattern_MainLabel_" + IntegerToString(uniqueID);
+         
+         ObjectsDeleteAll(0, prefix1);
+         ObjectsDeleteAll(0, prefix2);
+         ObjectDelete(0, labelName);
+         
+         Print("Pattern removed (old): ID ", uniqueID);
+         
+         for(int j = i; j < ArraySize(activePatterns) - 1; j++)
+            activePatterns[j] = activePatterns[j + 1];
+         
+         ArrayResize(activePatterns, ArraySize(activePatterns) - 1);
+      }
+   }
+}
+//+------------------------------------------------------------------+
