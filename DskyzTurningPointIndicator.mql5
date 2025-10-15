@@ -1,0 +1,702 @@
+//+------------------------------------------------------------------+
+//|                          DskyzTurningPointIndicator.mql5          |
+//|                                      Dskyz (DAFE)                |
+//+------------------------------------------------------------------+
+#property copyright "Hamoon Algo Ltd"
+#property link      ""
+#property version   "1.00"
+#property description "Dskyz (DAFE) Turning Point Indicator"
+#property indicator_chart_window
+#property indicator_buffers 6
+#property indicator_plots   4
+
+// Plot definitions
+#property indicator_label1  "Trend Support"
+#property indicator_type1   DRAW_LINE
+#property indicator_color1  clrGreen
+#property indicator_width1  1
+
+#property indicator_label2  "Trend Resistance"
+#property indicator_type2   DRAW_LINE
+#property indicator_color2  clrRed
+#property indicator_width2  1
+
+#property indicator_label3  "Buy Signal"
+#property indicator_type3   DRAW_ARROW
+#property indicator_color3  clrGreen
+#property indicator_width3  2
+
+#property indicator_label4  "Sell Signal"
+#property indicator_type4   DRAW_ARROW
+#property indicator_color4  clrRed
+#property indicator_width4  2
+
+//D=================================================================Z
+// INPUTS & SETTINGS
+//D=================================================================Z
+input group "🔁 Reversal Settings"
+input int InpSensitivity = 15;                    // High/Low Sensitivity
+input int InpATRPeriod = 16;                      // ATR Period
+input double InpMultiplier = 1.1;                 // ATR Multiplier
+input ENUM_APPLIED_PRICE InpPriceSource = PRICE_TYPICAL; // Source (HLCC4 equivalent)
+input bool InpUseATR = true;                      // Use ATR (vs SMA TR)
+input bool InpEnableReversal = true;              // Enable Reversal Mode
+input bool InpEnableBreakout = false;             // Enable Breakout Mode
+
+input group "📈 RSI Filter"
+input bool InpEnableRSI = true;                   // Enable RSI Filter
+input int InpRSILength = 14;                      // RSI Length
+input int InpRSITop = 65;                         // Overbought Threshold
+input int InpRSIBot = 35;                         // Oversold Threshold
+
+input group "📊 Volume Settings"
+input int InpVolLookback = 22;                    // Volume Lookback
+input double InpVolMultiplier = 1.3;              // Volume Multiplier
+
+//D=================================================================Z
+// GLOBAL CONSTANTS
+//D=================================================================Z
+const int RSI_LOOKBACK_TOP = 10;
+const int RSI_LOOKBACK_BOT = 10;
+
+//D=================================================================Z
+// INDICATOR BUFFERS
+//D=================================================================Z
+double TrendSupportBuffer[];
+double TrendResistanceBuffer[];
+double BuySignalBuffer[];
+double SellSignalBuffer[];
+double ATRWorkBuffer[];
+double RSIWorkBuffer[];
+
+//D=================================================================Z
+// INDICATOR HANDLES
+//D=================================================================Z
+int handleATR = INVALID_HANDLE;
+int handleRSI = INVALID_HANDLE;
+
+//D=================================================================Z
+// SUPERTREND STATE ARRAYS
+//D=================================================================Z
+double prevUpper[];
+double prevLower[];
+int prevTrend[];
+
+//D=================================================================Z
+// SIGNAL FLAG ARRAYS
+//D=================================================================Z
+int topFlag[];
+int botFlag[];
+
+//D=================================================================Z
+// DASHBOARD OBJECT NAMES
+//D=================================================================Z
+string watermarkName = "Watermark_DAFE";
+string dashboardPrefix = "Dashboard_DAFE_";
+
+//+------------------------------------------------------------------+
+//| Custom indicator initialization function                         |
+//+------------------------------------------------------------------+
+int OnInit()
+{
+   // Set indicator buffers
+   SetIndexBuffer(0, TrendSupportBuffer, INDICATOR_DATA);
+   SetIndexBuffer(1, TrendResistanceBuffer, INDICATOR_DATA);
+   SetIndexBuffer(2, BuySignalBuffer, INDICATOR_DATA);
+   SetIndexBuffer(3, SellSignalBuffer, INDICATOR_DATA);
+   SetIndexBuffer(4, ATRWorkBuffer, INDICATOR_CALCULATIONS);
+   SetIndexBuffer(5, RSIWorkBuffer, INDICATOR_CALCULATIONS);
+   
+   // Set empty values
+   PlotIndexSetDouble(0, PLOT_EMPTY_VALUE, 0.0);
+   PlotIndexSetDouble(1, PLOT_EMPTY_VALUE, 0.0);
+   PlotIndexSetDouble(2, PLOT_EMPTY_VALUE, 0.0);
+   PlotIndexSetDouble(3, PLOT_EMPTY_VALUE, 0.0);
+   
+   // Set arrow codes for buy/sell signals
+   PlotIndexSetInteger(2, PLOT_ARROW, 233);  // Up arrow
+   PlotIndexSetInteger(3, PLOT_ARROW, 234);  // Down arrow
+   
+   // Shift arrows to position them properly
+   PlotIndexSetInteger(2, PLOT_ARROW_SHIFT, -10);
+   PlotIndexSetInteger(3, PLOT_ARROW_SHIFT, 10);
+   
+   // Initialize indicator handles
+   handleATR = iATR(_Symbol, _Period, InpATRPeriod);
+   handleRSI = iRSI(_Symbol, _Period, InpRSILength, PRICE_CLOSE);
+   
+   if(handleATR == INVALID_HANDLE || handleRSI == INVALID_HANDLE)
+   {
+      Print("Error creating indicator handles");
+      return(INIT_FAILED);
+   }
+   
+   // Set indicator properties
+   IndicatorSetString(INDICATOR_SHORTNAME, "Dskyz (DAFE) Turning Point");
+   IndicatorSetInteger(INDICATOR_DIGITS, _Digits);
+   
+   // Initialize arrays
+   ArraySetAsSeries(TrendSupportBuffer, true);
+   ArraySetAsSeries(TrendResistanceBuffer, true);
+   ArraySetAsSeries(BuySignalBuffer, true);
+   ArraySetAsSeries(SellSignalBuffer, true);
+   ArraySetAsSeries(ATRWorkBuffer, true);
+   ArraySetAsSeries(RSIWorkBuffer, true);
+   
+   return(INIT_SUCCEEDED);
+}
+
+//+------------------------------------------------------------------+
+//| Custom indicator deinitialization function                       |
+//+------------------------------------------------------------------+
+void OnDeinit(const int reason)
+{
+   // Release indicator handles
+   if(handleATR != INVALID_HANDLE)
+      IndicatorRelease(handleATR);
+   if(handleRSI != INVALID_HANDLE)
+      IndicatorRelease(handleRSI);
+   
+   // Remove all dashboard objects
+   ObjectDelete(0, watermarkName);
+   
+   for(int i = 0; i < 30; i++)
+   {
+      for(int j = 0; j < 2; j++)
+      {
+         ObjectDelete(0, dashboardPrefix + IntegerToString(i) + "_" + IntegerToString(j));
+      }
+   }
+   
+   ChartRedraw(0);
+}
+
+//+------------------------------------------------------------------+
+//| Custom indicator iteration function                              |
+//+------------------------------------------------------------------+
+int OnCalculate(const int rates_total,
+                const int prev_calculated,
+                const datetime &time[],
+                const double &open[],
+                const double &high[],
+                const double &low[],
+                const double &close[],
+                const long &tick_volume[],
+                const long &volume[],
+                const int &spread[])
+{
+   // Check if we have enough bars
+   if(rates_total < InpATRPeriod + InpSensitivity)
+      return(0);
+   
+   // Set arrays as series
+   ArraySetAsSeries(time, true);
+   ArraySetAsSeries(open, true);
+   ArraySetAsSeries(high, true);
+   ArraySetAsSeries(low, true);
+   ArraySetAsSeries(close, true);
+   ArraySetAsSeries(tick_volume, true);
+   ArraySetAsSeries(volume, true);
+   
+   // Copy indicator data
+   int copied_atr = CopyBuffer(handleATR, 0, 0, rates_total, ATRWorkBuffer);
+   int copied_rsi = CopyBuffer(handleRSI, 0, 0, rates_total, RSIWorkBuffer);
+   
+   if(copied_atr <= 0 || copied_rsi <= 0)
+   {
+      Print("Error copying indicator buffers");
+      return(0);
+   }
+   
+   // Determine calculation start point
+   int limit;
+   if(prev_calculated == 0)
+   {
+      limit = rates_total - InpATRPeriod - InpSensitivity;
+      
+      // Resize working arrays
+      ArrayResize(prevUpper, rates_total);
+      ArrayResize(prevLower, rates_total);
+      ArrayResize(prevTrend, rates_total);
+      ArrayResize(topFlag, rates_total);
+      ArrayResize(botFlag, rates_total);
+      
+      ArraySetAsSeries(prevUpper, true);
+      ArraySetAsSeries(prevLower, true);
+      ArraySetAsSeries(prevTrend, true);
+      ArraySetAsSeries(topFlag, true);
+      ArraySetAsSeries(botFlag, true);
+      
+      // Initialize arrays
+      ArrayInitialize(prevUpper, 0);
+      ArrayInitialize(prevLower, 0);
+      ArrayInitialize(prevTrend, 1);
+      ArrayInitialize(topFlag, 0);
+      ArrayInitialize(botFlag, 0);
+      ArrayInitialize(TrendSupportBuffer, 0);
+      ArrayInitialize(TrendResistanceBuffer, 0);
+      ArrayInitialize(BuySignalBuffer, 0);
+      ArrayInitialize(SellSignalBuffer, 0);
+   }
+   else
+   {
+      limit = rates_total - prev_calculated;
+   }
+   
+   //D=================================================================Z
+   // MAIN CALCULATION LOOP
+   //D=================================================================Z
+   for(int i = limit; i >= 0; i--)
+   {
+      // Calculate source price (HLCC4: (high + low + close + close) / 4)
+      double src = (high[i] + low[i] + close[i] + close[i]) / 4.0;
+      
+      // Calculate True Range
+      double tr;
+      if(InpUseATR)
+      {
+         tr = ATRWorkBuffer[i];
+      }
+      else
+      {
+         // Calculate SMA of True Range
+         double sum_tr = 0;
+         int count = 0;
+         for(int j = 0; j < InpATRPeriod && (i + j) < rates_total; j++)
+         {
+            double h = high[i + j];
+            double l = low[i + j];
+            double c_prev = (i + j + 1 < rates_total) ? close[i + j + 1] : close[i + j];
+            double true_range = MathMax(h - l, MathMax(MathAbs(h - c_prev), MathAbs(l - c_prev)));
+            sum_tr += true_range;
+            count++;
+         }
+         tr = (count > 0) ? sum_tr / count : 0;
+      }
+      
+      //D=================================================================Z
+      // SUPERTREND CALCULATION
+      //D=================================================================Z
+      double upper = src - InpMultiplier * tr;
+      double lower = src + InpMultiplier * tr;
+      
+      // Update upper band
+      if(i < rates_total - 1)
+      {
+         if(close[i + 1] > prevUpper[i + 1])
+            upper = MathMax(upper, prevUpper[i + 1]);
+      }
+      prevUpper[i] = upper;
+      
+      // Update lower band
+      if(i < rates_total - 1)
+      {
+         if(close[i + 1] < prevLower[i + 1])
+            lower = MathMin(lower, prevLower[i + 1]);
+      }
+      prevLower[i] = lower;
+      
+      // Determine trend
+      int trend = 1;
+      if(i < rates_total - 1)
+      {
+         if(prevTrend[i + 1] == -1 && close[i] > prevLower[i + 1])
+            trend = 1;
+         else if(prevTrend[i + 1] == 1 && close[i] < prevUpper[i + 1])
+            trend = -1;
+         else
+            trend = prevTrend[i + 1];
+      }
+      prevTrend[i] = trend;
+      
+      // Set trend buffers
+      if(trend == 1)
+      {
+         TrendSupportBuffer[i] = prevUpper[i];
+         TrendResistanceBuffer[i] = 0;
+      }
+      else
+      {
+         TrendSupportBuffer[i] = 0;
+         TrendResistanceBuffer[i] = prevLower[i];
+      }
+      
+      //D=================================================================Z
+      // ATR VOLATILITY ZONES (HEATMAP)
+      //D=================================================================Z
+      double atrValue = ATRWorkBuffer[i];
+      double atrSum = 0;
+      int atrCount = 0;
+      for(int j = 0; j < InpATRPeriod && (i + j) < rates_total; j++)
+      {
+         atrSum += ATRWorkBuffer[i + j];
+         atrCount++;
+      }
+      double atrAvg = (atrCount > 0) ? atrSum / atrCount : 0;
+      
+      // Determine volatility heatmap color (for reference - can't directly apply bgcolor in MQL5)
+      // High volatility: atrValue > atrAvg * 1.5 -> Red
+      // Low volatility: atrValue < atrAvg * 0.8 -> Green
+      // Normal: Yellow
+      
+      //D=================================================================Z
+      // VOLUME SPIKE CALCULATION
+      //D=================================================================Z
+      long currentVol = (volume[i] > 0) ? volume[i] : tick_volume[i];
+      double volSum = 0;
+      int volCount = 0;
+      for(int j = 0; j < InpVolLookback && (i + j) < rates_total; j++)
+      {
+         long vol = (volume[i + j] > 0) ? volume[i + j] : tick_volume[i + j];
+         volSum += (double)vol;
+         volCount++;
+      }
+      double volAvg = (volCount > 0) ? volSum / volCount : 0;
+      bool volSpike = currentVol > InpVolMultiplier * volAvg;
+      
+      //D=================================================================Z
+      // RSI CONDITIONS
+      //D=================================================================Z
+      double rsi = RSIWorkBuffer[i];
+      bool rsiBottomCond = true;
+      bool rsiTopCond = true;
+      
+      if(InpEnableRSI)
+      {
+         // Check if RSI was below threshold in recent bars (barssince equivalent)
+         int barsSinceBot = RSI_LOOKBACK_BOT;
+         for(int j = 0; j < RSI_LOOKBACK_BOT && (i + j) < rates_total; j++)
+         {
+            if(RSIWorkBuffer[i + j] < InpRSIBot)
+            {
+               barsSinceBot = j;
+               break;
+            }
+         }
+         rsiBottomCond = (barsSinceBot < RSI_LOOKBACK_BOT);
+         
+         // Check if RSI was above threshold in recent bars
+         int barsSinceTop = RSI_LOOKBACK_TOP;
+         for(int j = 0; j < RSI_LOOKBACK_TOP && (i + j) < rates_total; j++)
+         {
+            if(RSIWorkBuffer[i + j] > InpRSITop)
+            {
+               barsSinceTop = j;
+               break;
+            }
+         }
+         rsiTopCond = (barsSinceTop < RSI_LOOKBACK_TOP);
+      }
+      
+      //D=================================================================Z
+      // HIGH/LOW DETECTION
+      //D=================================================================Z
+      int lookback = (int)MathRound((double)InpSensitivity / 10.0);
+      if(lookback < 1) lookback = 1;
+      
+      // Find highest high over sensitivity period
+      double highestVal = high[i];
+      for(int j = 0; j < InpSensitivity && (i + j) < rates_total; j++)
+      {
+         if(high[i + j] > highestVal)
+            highestVal = high[i + j];
+      }
+      
+      // Find lowest low over sensitivity period
+      double lowestVal = low[i];
+      for(int j = 0; j < InpSensitivity && (i + j) < rates_total; j++)
+      {
+         if(low[i + j] < lowestVal)
+            lowestVal = low[i + j];
+      }
+      
+      // Find highest high over sensitivity period at lookback bars ago
+      double highestValLookback = 0;
+      if(i + lookback < rates_total)
+      {
+         highestValLookback = high[i + lookback];
+         for(int j = 0; j < InpSensitivity && (i + lookback + j) < rates_total; j++)
+         {
+            if(high[i + lookback + j] > highestValLookback)
+               highestValLookback = high[i + lookback + j];
+         }
+      }
+      
+      // Find lowest low over sensitivity period at lookback bars ago
+      double lowestValLookback = 0;
+      if(i + lookback < rates_total)
+      {
+         lowestValLookback = low[i + lookback];
+         for(int j = 0; j < InpSensitivity && (i + lookback + j) < rates_total; j++)
+         {
+            if(low[i + lookback + j] < lowestValLookback)
+               lowestValLookback = low[i + lookback + j];
+         }
+      }
+      
+      bool isNewHigh = (highestVal != highestValLookback) && (close[i] > highestValLookback);
+      bool isNewLow = (lowestVal != lowestValLookback) && (close[i] < lowestValLookback);
+      
+      //D=================================================================Z
+      // SIGNAL FLAGS UPDATE
+      //D=================================================================Z
+      if(i < rates_total - 1)
+      {
+         // Update topFlag
+         if(prevTrend[i] == -1)
+            topFlag[i] = 0;
+         else if(isNewHigh && prevTrend[i] == 1)
+            topFlag[i] = 1;
+         else
+            topFlag[i] = topFlag[i + 1];
+         
+         // Update botFlag
+         if(prevTrend[i] == 1)
+            botFlag[i] = 0;
+         else if(isNewLow && prevTrend[i] == -1)
+            botFlag[i] = 1;
+         else
+            botFlag[i] = botFlag[i + 1];
+      }
+      else
+      {
+         topFlag[i] = 0;
+         botFlag[i] = 0;
+      }
+      
+      //D=================================================================Z
+      // SIGNAL GENERATION
+      //D=================================================================Z
+      bool sellSignal = false;
+      bool buySignal = false;
+      
+      // Reversal Logic
+      if(InpEnableReversal && i < rates_total - 1)
+      {
+         if((topFlag[i + 1] == 1 && topFlag[i] == 0) && rsiTopCond && volSpike)
+            sellSignal = true;
+         
+         if((botFlag[i + 1] == 1 && botFlag[i] == 0) && rsiBottomCond && volSpike)
+            buySignal = true;
+      }
+      
+      // Breakout Logic
+      if(InpEnableBreakout)
+      {
+         if(isNewHigh && prevTrend[i] == 1 && rsiTopCond && volSpike)
+            sellSignal = true;
+         
+         if(isNewLow && prevTrend[i] == -1 && rsiBottomCond && volSpike)
+            buySignal = true;
+      }
+      
+      //D=================================================================Z
+      // SET SIGNAL BUFFERS
+      //D=================================================================Z
+      if(buySignal)
+         BuySignalBuffer[i] = low[i] - (3 * _Point * MathPow(10, _Digits - 1));
+      else
+         BuySignalBuffer[i] = 0;
+      
+      if(sellSignal)
+         SellSignalBuffer[i] = high[i] + (3 * _Point * MathPow(10, _Digits - 1));
+      else
+         SellSignalBuffer[i] = 0;
+      
+      //D=================================================================Z
+      // ALERTS (only on bar 0)
+      //D=================================================================Z
+      if(i == 0)
+      {
+         static datetime lastAlertTime = 0;
+         if(time[0] != lastAlertTime)
+         {
+            if(buySignal)
+            {
+               Alert("Trading signal: Buy - ", _Symbol, " ", EnumToString(_Period));
+               SendNotification("Trading signal: Buy - " + _Symbol);
+               lastAlertTime = time[0];
+            }
+            
+            if(sellSignal)
+            {
+               Alert("Trading signal: Sell - ", _Symbol, " ", EnumToString(_Period));
+               SendNotification("Trading signal: Sell - " + _Symbol);
+               lastAlertTime = time[0];
+            }
+         }
+      }
+   }
+   
+   //D=================================================================Z
+   // UPDATE DASHBOARD
+   //D=================================================================Z
+   UpdateDashboard();
+   
+   return(rates_total);
+}
+
+//+------------------------------------------------------------------+
+//| Update Dashboard Function                                         |
+//+------------------------------------------------------------------+
+void UpdateDashboard()
+{
+   if(!ChartGetInteger(0, CHART_BRING_TO_TOP))
+      return;
+   
+   // Get current values
+   double currentClose = iClose(_Symbol, _Period, 0);
+   double currentATR = ATRWorkBuffer[0];
+   double currentRSI = RSIWorkBuffer[0];
+   int currentTrend = prevTrend[0];
+   bool hasBuySignal = (BuySignalBuffer[0] != 0);
+   bool hasSellSignal = (SellSignalBuffer[0] != 0);
+   
+   // Calculate ATR average
+   double atrSum = 0;
+   int atrCount = 0;
+   for(int i = 0; i < InpATRPeriod && i < ArraySize(ATRWorkBuffer); i++)
+   {
+      atrSum += ATRWorkBuffer[i];
+      atrCount++;
+   }
+   double atrAvg = (atrCount > 0) ? atrSum / atrCount : 0;
+   
+   // Calculate volume spike
+   long currentVol = (long)iVolume(_Symbol, _Period, 0);
+   double volSum = 0;
+   for(int i = 0; i < InpVolLookback; i++)
+   {
+      volSum += (double)iVolume(_Symbol, _Period, i);
+   }
+   double volAvg = volSum / InpVolLookback;
+   bool volSpike = currentVol > InpVolMultiplier * volAvg;
+   
+   //D=================================================================Z
+   // CREATE WATERMARK (Bottom-Right)
+   //D=================================================================Z
+   CreateTextLabel(watermarkName,
+                   "⚡ Dskyz (DAFE) Turning Point Indicator",
+                   10, 30,
+                   clrDarkOrchid,
+                   10,
+                   CORNER_LEFT_UPPER,
+                   ANCHOR_LEFT_UPPER);
+   
+   //D=================================================================Z
+   // CREATE DASHBOARD (Middle-Right)
+   //D=================================================================Z
+   int xBase = (int)ChartGetInteger(0, CHART_WIDTH_IN_PIXELS) - 280;
+   int yBase = 150;
+   int rowHeight = 22;
+   int col1Width = 120;
+   int col2Width = 120;
+   
+   color bgColor = clrNONE;
+   color textColor = clrWhite;
+   color labelColor = C'135,135,135';
+   
+   int row = 0;
+   
+   // Row 0: Title
+   CreateDashboardCell(row, 0, "⚡(DAFE) Turning Point", labelColor, xBase, yBase, rowHeight);
+   row++;
+   
+   // Row 1: Mode
+   CreateDashboardCell(row, 0, "Mode:", textColor, xBase, yBase, rowHeight);
+   string modeText = (InpEnableReversal && InpEnableBreakout) ? "Reversal + Breakout" :
+                     InpEnableReversal ? "Reversal" :
+                     InpEnableBreakout ? "Breakout" : "None";
+   CreateDashboardCell(row, 1, modeText, textColor, xBase, yBase, rowHeight);
+   row++;
+   
+   // Row 2: Trend
+   CreateDashboardCell(row, 0, "Trend:", textColor, xBase, yBase, rowHeight);
+   string trendText = (currentTrend == 1) ? "Bullish" : "Bearish";
+   color trendColor = (currentTrend == 1) ? clrGreen : clrRed;
+   CreateDashboardCell(row, 1, trendText, trendColor, xBase, yBase, rowHeight);
+   row++;
+   
+   // Row 3: ATR
+   CreateDashboardCell(row, 0, "ATR:", textColor, xBase, yBase, rowHeight);
+   CreateDashboardCell(row, 1, DoubleToString(currentATR, 2), textColor, xBase, yBase, rowHeight);
+   row++;
+   
+   // Row 4: ATR Avg
+   CreateDashboardCell(row, 0, "ATR Avg:", textColor, xBase, yBase, rowHeight);
+   CreateDashboardCell(row, 1, DoubleToString(atrAvg, 2), textColor, xBase, yBase, rowHeight);
+   row++;
+   
+   // Row 5: Volume Spike
+   CreateDashboardCell(row, 0, "Volume Spike:", textColor, xBase, yBase, rowHeight);
+   CreateDashboardCell(row, 1, volSpike ? "YES" : "NO", volSpike ? clrGreen : clrRed, xBase, yBase, rowHeight);
+   row++;
+   
+   // Row 6: RSI
+   CreateDashboardCell(row, 0, "RSI:", textColor, xBase, yBase, rowHeight);
+   CreateDashboardCell(row, 1, DoubleToString(currentRSI, 2), textColor, xBase, yBase, rowHeight);
+   row++;
+   
+   // Row 7: RSI Condition
+   CreateDashboardCell(row, 0, "RSI Cond:", textColor, xBase, yBase, rowHeight);
+   string rsiCondText = InpEnableRSI ?
+                       (currentRSI < InpRSIBot ? "Oversold" :
+                        currentRSI > InpRSITop ? "Overbought" : "Neutral") :
+                       "Disabled";
+   CreateDashboardCell(row, 1, rsiCondText, textColor, xBase, yBase, rowHeight);
+   row++;
+   
+   // Row 8: Last Signal
+   CreateDashboardCell(row, 0, "Last Signal:", textColor, xBase, yBase, rowHeight);
+   string lastSignal = hasBuySignal ? "Buy" : hasSellSignal ? "Sell" : "None";
+   color signalColor = hasBuySignal ? clrGreen : hasSellSignal ? clrRed : textColor;
+   CreateDashboardCell(row, 1, lastSignal, signalColor, xBase, yBase, rowHeight);
+   row++;
+   
+   // Optional empty rows for future metrics
+   for(int i = row; i < 12; i++)
+   {
+      CreateDashboardCell(i, 0, "", textColor, xBase, yBase, rowHeight);
+      CreateDashboardCell(i, 1, "", textColor, xBase, yBase, rowHeight);
+   }
+   
+   ChartRedraw(0);
+}
+
+//+------------------------------------------------------------------+
+//| Create Dashboard Cell                                            |
+//+------------------------------------------------------------------+
+void CreateDashboardCell(int row, int col, string text, color clr, 
+                        int xBase, int yBase, int rowHeight)
+{
+   string name = dashboardPrefix + IntegerToString(row) + "_" + IntegerToString(col);
+   int xPos = xBase + (col * 120);
+   int yPos = yBase + (row * rowHeight);
+   
+   CreateTextLabel(name, text, xPos, yPos, clr, 8, CORNER_LEFT_UPPER, ANCHOR_LEFT_UPPER);
+}
+
+//+------------------------------------------------------------------+
+//| Create Text Label                                                |
+//+------------------------------------------------------------------+
+void CreateTextLabel(string name, string text, int x, int y, color clr, 
+                    int fontSize, ENUM_BASE_CORNER corner, ENUM_ANCHOR_POINT anchor)
+{
+   if(ObjectFind(0, name) < 0)
+   {
+      ObjectCreate(0, name, OBJ_LABEL, 0, 0, 0);
+   }
+   
+   ObjectSetInteger(0, name, OBJPROP_CORNER, corner);
+   ObjectSetInteger(0, name, OBJPROP_ANCHOR, anchor);
+   ObjectSetInteger(0, name, OBJPROP_XDISTANCE, x);
+   ObjectSetInteger(0, name, OBJPROP_YDISTANCE, y);
+   ObjectSetInteger(0, name, OBJPROP_COLOR, clr);
+   ObjectSetInteger(0, name, OBJPROP_FONTSIZE, fontSize);
+   ObjectSetInteger(0, name, OBJPROP_SELECTABLE, false);
+   ObjectSetInteger(0, name, OBJPROP_BACK, false);
+   ObjectSetString(0, name, OBJPROP_TEXT, text);
+   ObjectSetString(0, name, OBJPROP_FONT, "Arial");
+}
+
+//+------------------------------------------------------------------+
