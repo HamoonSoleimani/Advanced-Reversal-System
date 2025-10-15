@@ -1,0 +1,565 @@
+//+------------------------------------------------------------------+
+//|                                    SmartMoneyConcepts.mq5        |
+//|                                    Hamoon Algo Ltd               |
+//|          Licensed under CC BY-NC-SA 4.0 International            |
+//|                                                                  |
+//+------------------------------------------------------------------+
+#property copyright "Hamoon Algo Ltd"
+#property link      "https://creativecommons.org/licenses/by-nc-sa/4.0/"
+#property version   "2.10"
+#property description "Smart Money Concepts"
+#property indicator_chart_window
+#property indicator_buffers 2
+#property indicator_plots   2
+
+//--- Plot settings
+#property indicator_label1  "Buy Signal"
+#property indicator_type1   DRAW_ARROW
+#property indicator_color1  clrLime
+#property indicator_width1  2
+
+#property indicator_label2  "Sell Signal"
+#property indicator_type2   DRAW_ARROW
+#property indicator_color2  clrRed
+#property indicator_width2  2
+
+//--- Buffers
+double BuySignalBuffer[];
+double SellSignalBuffer[];
+
+//--- Input Parameters
+input group "============ Display Settings ============"
+input int MaxBarsToShow = 500;                              // Maximum Bars to Display
+input bool ShowHistoricalStructure = false;                 // Show All Historical Structure
+
+input group "============ Structure Settings ============"
+input bool ShowSwingStructure = true;                       // Show Swing Structure (BOS/CHoCH)
+input int SwingLength = 50;                                 // Swing Detection Length
+input bool ShowInternalStructure = false;                   // Show Internal Structure
+input int InternalLength = 10;                              // Internal Detection Length
+input color BullishStructureColor = clrDodgerBlue;         // Bullish Structure Color
+input color BearishStructureColor = clrOrangeRed;          // Bearish Structure Color
+
+input group "============ Order Blocks ============"
+input bool ShowOrderBlocks = true;                          // Show Order Blocks
+input int MaxOrderBlocks = 3;                               // Maximum Order Blocks to Show
+input color BullishOBColor = clrDodgerBlue;                // Bullish OB Color
+input color BearishOBColor = clrOrangeRed;                 // Bearish OB Color
+input int OBTransparency = 85;                              // OB Transparency (0-100)
+
+input group "============ Trading Signals ============"
+input bool ShowBuySignals = true;                           // Show Buy Signals
+input bool ShowSellSignals = true;                          // Show Sell Signals
+input bool SignalOnBOS = true;                             // Signal on BOS
+input bool SignalOnCHoCH = false;                          // Signal on CHoCH
+
+input group "============ Labels ============"
+input bool ShowSwingLabels = false;                         // Show HH/HL/LL/LH Labels
+input bool ShowStructureLabels = true;                      // Show BOS/CHoCH Labels
+input int LabelFontSize = 8;                               // Label Font Size
+
+//--- Structures
+struct Pivot {
+    double price;
+    datetime time;
+    int barIndex;
+    bool broken;
+    bool valid;
+};
+
+struct OrderBlock {
+    double top;
+    double bottom;
+    datetime time;
+    bool isBullish;
+    bool active;
+};
+
+struct MarketTrend {
+    int direction;  // 1=Bullish, -1=Bearish, 0=Neutral
+};
+
+//--- Global Variables
+Pivot g_SwingHigh;
+Pivot g_SwingLow;
+Pivot g_InternalHigh;
+Pivot g_InternalLow;
+MarketTrend g_SwingTrend;
+MarketTrend g_InternalTrend;
+OrderBlock g_OrderBlocks[];
+int g_OBCount = 0;
+int g_ObjectID = 0;
+
+//+------------------------------------------------------------------+
+//| Initialization                                                    |
+//+------------------------------------------------------------------+
+int OnInit() {
+    if(SwingLength < 10 || SwingLength > 200) {
+        Alert("Swing Length must be between 10 and 200");
+        return INIT_PARAMETERS_INCORRECT;
+    }
+    
+    SetIndexBuffer(0, BuySignalBuffer, INDICATOR_DATA);
+    SetIndexBuffer(1, SellSignalBuffer, INDICATOR_DATA);
+    
+    PlotIndexSetInteger(0, PLOT_ARROW, 233);
+    PlotIndexSetInteger(1, PLOT_ARROW, 234);
+    PlotIndexSetInteger(0, PLOT_ARROW_SHIFT, -15);
+    PlotIndexSetInteger(1, PLOT_ARROW_SHIFT, 15);
+    
+    PlotIndexSetDouble(0, PLOT_EMPTY_VALUE, EMPTY_VALUE);
+    PlotIndexSetDouble(1, PLOT_EMPTY_VALUE, EMPTY_VALUE);
+    
+    ArraySetAsSeries(BuySignalBuffer, true);
+    ArraySetAsSeries(SellSignalBuffer, true);
+    
+    ArrayResize(g_OrderBlocks, 50);
+    for(int i = 0; i < 50; i++) {
+        g_OrderBlocks[i].top = 0;
+        g_OrderBlocks[i].bottom = 0;
+        g_OrderBlocks[i].time = 0;
+        g_OrderBlocks[i].isBullish = false;
+        g_OrderBlocks[i].active = false;
+    }
+    
+    g_SwingHigh.price = 0;
+    g_SwingHigh.time = 0;
+    g_SwingHigh.barIndex = 0;
+    g_SwingHigh.broken = false;
+    g_SwingHigh.valid = false;
+    
+    g_SwingLow.price = 0;
+    g_SwingLow.time = 0;
+    g_SwingLow.barIndex = 0;
+    g_SwingLow.broken = false;
+    g_SwingLow.valid = false;
+    
+    g_InternalHigh.price = 0;
+    g_InternalHigh.time = 0;
+    g_InternalHigh.barIndex = 0;
+    g_InternalHigh.broken = false;
+    g_InternalHigh.valid = false;
+    
+    g_InternalLow.price = 0;
+    g_InternalLow.time = 0;
+    g_InternalLow.barIndex = 0;
+    g_InternalLow.broken = false;
+    g_InternalLow.valid = false;
+    
+    g_SwingTrend.direction = 0;
+    g_InternalTrend.direction = 0;
+    
+    IndicatorSetString(INDICATOR_SHORTNAME, "SMC [LuxAlgo] Simplified");
+    
+    return INIT_SUCCEEDED;
+}
+
+//+------------------------------------------------------------------+
+//| Deinitialization                                                  |
+//+------------------------------------------------------------------+
+void OnDeinit(const int reason) {
+    ObjectsDeleteAll(0, "SMC_");
+    Comment("");
+}
+
+//+------------------------------------------------------------------+
+//| Create object name                                               |
+//+------------------------------------------------------------------+
+string ObjectName(string prefix) {
+    return "SMC_" + prefix + "_" + IntegerToString(g_ObjectID++);
+}
+
+//+------------------------------------------------------------------+
+//| Delete old objects                                               |
+//+------------------------------------------------------------------+
+void DeleteOldObjects(int maxBars) {
+    datetime cutoffTime = iTime(_Symbol, PERIOD_CURRENT, maxBars);
+    
+    int total = ObjectsTotal(0);
+    for(int i = total - 1; i >= 0; i--) {
+        string name = ObjectName(0, i);
+        if(StringFind(name, "SMC_") != 0) continue;
+        
+        datetime objTime = (datetime)ObjectGetInteger(0, name, OBJPROP_TIME);
+        if(objTime < cutoffTime && !ShowHistoricalStructure) {
+            ObjectDelete(0, name);
+        }
+    }
+}
+
+//+------------------------------------------------------------------+
+//| Get highest bar                                                   |
+//+------------------------------------------------------------------+
+int iHighest(int start, int count) {
+    int highest = start;
+    double highValue = iHigh(_Symbol, PERIOD_CURRENT, start);
+    
+    for(int i = start; i < start + count && i < Bars(_Symbol, PERIOD_CURRENT); i++) {
+        double val = iHigh(_Symbol, PERIOD_CURRENT, i);
+        if(val > highValue) {
+            highValue = val;
+            highest = i;
+        }
+    }
+    return highest;
+}
+
+//+------------------------------------------------------------------+
+//| Get lowest bar                                                    |
+//+------------------------------------------------------------------+
+int iLowest(int start, int count) {
+    int lowest = start;
+    double lowValue = iLow(_Symbol, PERIOD_CURRENT, start);
+    
+    for(int i = start; i < start + count && i < Bars(_Symbol, PERIOD_CURRENT); i++) {
+        double val = iLow(_Symbol, PERIOD_CURRENT, i);
+        if(val < lowValue) {
+            lowValue = val;
+            lowest = i;
+        }
+    }
+    return lowest;
+}
+
+//+------------------------------------------------------------------+
+//| Draw line                                                         |
+//+------------------------------------------------------------------+
+void DrawLine(datetime t1, double p1, datetime t2, double p2, color clr, int style = STYLE_SOLID) {
+    string name = ObjectName("Line");
+    
+    if(ObjectCreate(0, name, OBJ_TREND, 0, t1, p1, t2, p2)) {
+        ObjectSetInteger(0, name, OBJPROP_COLOR, clr);
+        ObjectSetInteger(0, name, OBJPROP_STYLE, style);
+        ObjectSetInteger(0, name, OBJPROP_WIDTH, 1);
+        ObjectSetInteger(0, name, OBJPROP_RAY_RIGHT, false);
+        ObjectSetInteger(0, name, OBJPROP_BACK, true);
+        ObjectSetInteger(0, name, OBJPROP_SELECTABLE, false);
+        ObjectSetInteger(0, name, OBJPROP_HIDDEN, true);
+    }
+}
+
+//+------------------------------------------------------------------+
+//| Draw text                                                         |
+//+------------------------------------------------------------------+
+void DrawText(datetime time, double price, string text, color clr, int anchor = ANCHOR_CENTER) {
+    string name = ObjectName("Text");
+    
+    if(ObjectCreate(0, name, OBJ_TEXT, 0, time, price)) {
+        ObjectSetString(0, name, OBJPROP_TEXT, text);
+        ObjectSetInteger(0, name, OBJPROP_COLOR, clr);
+        ObjectSetInteger(0, name, OBJPROP_FONTSIZE, LabelFontSize);
+        ObjectSetInteger(0, name, OBJPROP_ANCHOR, anchor);
+        ObjectSetInteger(0, name, OBJPROP_SELECTABLE, false);
+        ObjectSetInteger(0, name, OBJPROP_HIDDEN, true);
+    }
+}
+
+//+------------------------------------------------------------------+
+//| Draw rectangle                                                    |
+//+------------------------------------------------------------------+
+void DrawBox(datetime t1, double p1, double p2, color clr) {
+    string name = ObjectName("Box");
+    datetime t2 = TimeCurrent() + PeriodSeconds() * 50;
+    
+    if(ObjectCreate(0, name, OBJ_RECTANGLE, 0, t1, p1, t2, p2)) {
+        ObjectSetInteger(0, name, OBJPROP_COLOR, clr);
+        ObjectSetInteger(0, name, OBJPROP_FILL, true);
+        ObjectSetInteger(0, name, OBJPROP_BACK, true);
+        ObjectSetInteger(0, name, OBJPROP_SELECTABLE, false);
+        ObjectSetInteger(0, name, OBJPROP_HIDDEN, true);
+        ObjectSetInteger(0, name, OBJPROP_WIDTH, 1);
+    }
+}
+
+//+------------------------------------------------------------------+
+//| Update pivot                                                      |
+//+------------------------------------------------------------------+
+void UpdatePivot(int bar, int length, Pivot &high, Pivot &low, MarketTrend &trend, bool isInternal) {
+    if(bar + length >= Bars(_Symbol, PERIOD_CURRENT)) return;
+    
+    double currentHigh = iHigh(_Symbol, PERIOD_CURRENT, bar);
+    double currentLow = iLow(_Symbol, PERIOD_CURRENT, bar);
+    
+    int highBar = iHighest(bar + 1, length - 1);
+    int lowBar = iLowest(bar + 1, length - 1);
+    
+    double rangeHigh = iHigh(_Symbol, PERIOD_CURRENT, highBar);
+    double rangeLow = iLow(_Symbol, PERIOD_CURRENT, lowBar);
+    
+    // New swing high
+    if(currentHigh > rangeHigh && trend.direction != -1) {
+        int pivotBar = iHighest(bar, length);
+        
+        high.price = iHigh(_Symbol, PERIOD_CURRENT, pivotBar);
+        high.time = iTime(_Symbol, PERIOD_CURRENT, pivotBar);
+        high.barIndex = pivotBar;
+        high.broken = false;
+        high.valid = true;
+        
+        trend.direction = -1;
+        
+        if(ShowSwingLabels && !isInternal) {
+            DrawText(high.time, high.price, "HH", BearishStructureColor, ANCHOR_LOWER);
+        }
+    }
+    
+    // New swing low
+    if(currentLow < rangeLow && trend.direction != 1) {
+        int pivotBar = iLowest(bar, length);
+        
+        low.price = iLow(_Symbol, PERIOD_CURRENT, pivotBar);
+        low.time = iTime(_Symbol, PERIOD_CURRENT, pivotBar);
+        low.barIndex = pivotBar;
+        low.broken = false;
+        low.valid = true;
+        
+        trend.direction = 1;
+        
+        if(ShowSwingLabels && !isInternal) {
+            DrawText(low.time, low.price, "LL", BullishStructureColor, ANCHOR_UPPER);
+        }
+    }
+}
+
+//+------------------------------------------------------------------+
+//| Create order block                                               |
+//+------------------------------------------------------------------+
+void CreateOrderBlock(Pivot &pivot, bool isBullish) {
+    if(!pivot.valid) return;
+    
+    // Find OB candle
+    double obTop = 0, obBottom = 0;
+    datetime obTime = 0;
+    
+    if(isBullish) {
+        // Last down candle before low
+        for(int i = pivot.barIndex; i >= 0 && i > pivot.barIndex - 10; i--) {
+            double o = iOpen(_Symbol, PERIOD_CURRENT, i);
+            double c = iClose(_Symbol, PERIOD_CURRENT, i);
+            
+            if(c < o) {
+                obTop = iHigh(_Symbol, PERIOD_CURRENT, i);
+                obBottom = iLow(_Symbol, PERIOD_CURRENT, i);
+                obTime = iTime(_Symbol, PERIOD_CURRENT, i);
+                break;
+            }
+        }
+    } else {
+        // Last up candle before high
+        for(int i = pivot.barIndex; i >= 0 && i > pivot.barIndex - 10; i--) {
+            double o = iOpen(_Symbol, PERIOD_CURRENT, i);
+            double c = iClose(_Symbol, PERIOD_CURRENT, i);
+            
+            if(c > o) {
+                obTop = iHigh(_Symbol, PERIOD_CURRENT, i);
+                obBottom = iLow(_Symbol, PERIOD_CURRENT, i);
+                obTime = iTime(_Symbol, PERIOD_CURRENT, i);
+                break;
+            }
+        }
+    }
+    
+    if(obTime == 0) return;
+    
+    // Store OB
+    if(g_OBCount >= MaxOrderBlocks) {
+        // Remove oldest
+        for(int i = 0; i < MaxOrderBlocks - 1; i++) {
+            g_OrderBlocks[i] = g_OrderBlocks[i + 1];
+        }
+        g_OBCount = MaxOrderBlocks - 1;
+    }
+    
+    g_OrderBlocks[g_OBCount].top = obTop;
+    g_OrderBlocks[g_OBCount].bottom = obBottom;
+    g_OrderBlocks[g_OBCount].time = obTime;
+    g_OrderBlocks[g_OBCount].isBullish = isBullish;
+    g_OrderBlocks[g_OBCount].active = true;
+    g_OBCount++;
+}
+
+//+------------------------------------------------------------------+
+//| Check structure break                                            |
+//+------------------------------------------------------------------+
+void CheckBreak(int bar, Pivot &high, Pivot &low, MarketTrend &trend, bool isInternal) {
+    if(!ShowSwingStructure && !isInternal) return;
+    if(!ShowInternalStructure && isInternal) return;
+    
+    double close = iClose(_Symbol, PERIOD_CURRENT, bar);
+    datetime time = iTime(_Symbol, PERIOD_CURRENT, bar);
+    
+    // Bullish break
+    if(high.valid && !high.broken && close > high.price) {
+        bool isCHoCH = (trend.direction == -1);
+        string label = isCHoCH ? "CHoCH" : "BOS";
+        
+        if(ShowStructureLabels) {
+            color clr = BullishStructureColor;
+            int style = isInternal ? STYLE_DASH : STYLE_SOLID;
+            
+            DrawLine(high.time, high.price, time, high.price, clr, style);
+            
+            datetime midTime = (datetime)((long)high.time + ((long)time - (long)high.time) / 2);
+            DrawText(midTime, high.price, label, clr, ANCHOR_LOWER);
+        }
+        
+        high.broken = true;
+        trend.direction = 1;
+        
+        if(ShowOrderBlocks && !isInternal) {
+            CreateOrderBlock(high, true);
+        }
+        
+        if(ShowBuySignals && !isInternal) {
+            if((SignalOnBOS && !isCHoCH) || (SignalOnCHoCH && isCHoCH)) {
+                BuySignalBuffer[bar] = iLow(_Symbol, PERIOD_CURRENT, bar) - 20 * _Point;
+            }
+        }
+    }
+    
+    // Bearish break
+    if(low.valid && !low.broken && close < low.price) {
+        bool isCHoCH = (trend.direction == 1);
+        string label = isCHoCH ? "CHoCH" : "BOS";
+        
+        if(ShowStructureLabels) {
+            color clr = BearishStructureColor;
+            int style = isInternal ? STYLE_DASH : STYLE_SOLID;
+            
+            DrawLine(low.time, low.price, time, low.price, clr, style);
+            
+            datetime midTime = (datetime)((long)low.time + ((long)time - (long)low.time) / 2);
+            DrawText(midTime, low.price, label, clr, ANCHOR_UPPER);
+        }
+        
+        low.broken = true;
+        trend.direction = -1;
+        
+        if(ShowOrderBlocks && !isInternal) {
+            CreateOrderBlock(low, false);
+        }
+        
+        if(ShowSellSignals && !isInternal) {
+            if((SignalOnBOS && !isCHoCH) || (SignalOnCHoCH && isCHoCH)) {
+                SellSignalBuffer[bar] = iHigh(_Symbol, PERIOD_CURRENT, bar) + 20 * _Point;
+            }
+        }
+    }
+}
+
+//+------------------------------------------------------------------+
+//| Check OB mitigation                                              |
+//+------------------------------------------------------------------+
+void CheckOBMitigation(int bar) {
+    double high = iHigh(_Symbol, PERIOD_CURRENT, bar);
+    double low = iLow(_Symbol, PERIOD_CURRENT, bar);
+    
+    for(int i = g_OBCount - 1; i >= 0; i--) {
+        if(!g_OrderBlocks[i].active) continue;
+        
+        bool mitigated = false;
+        
+        if(g_OrderBlocks[i].isBullish) {
+            if(low <= g_OrderBlocks[i].bottom) mitigated = true;
+        } else {
+            if(high >= g_OrderBlocks[i].top) mitigated = true;
+        }
+        
+        if(mitigated) {
+            g_OrderBlocks[i].active = false;
+            
+            // Shift array
+            for(int j = i; j < g_OBCount - 1; j++) {
+                g_OrderBlocks[j] = g_OrderBlocks[j + 1];
+            }
+            g_OBCount--;
+        }
+    }
+}
+
+//+------------------------------------------------------------------+
+//| Draw order blocks                                                |
+//+------------------------------------------------------------------+
+void DrawOrderBlocks() {
+    // Delete old boxes
+    int total = ObjectsTotal(0);
+    for(int i = total - 1; i >= 0; i--) {
+        string name = ObjectName(0, i);
+        if(StringFind(name, "SMC_Box_") == 0) {
+            ObjectDelete(0, name);
+        }
+    }
+    
+    // Draw active OBs
+    for(int i = 0; i < g_OBCount; i++) {
+        if(!g_OrderBlocks[i].active) continue;
+        
+        color clr = g_OrderBlocks[i].isBullish ? BullishOBColor : BearishOBColor;
+        DrawBox(g_OrderBlocks[i].time, g_OrderBlocks[i].top, g_OrderBlocks[i].bottom, clr);
+    }
+}
+
+//+------------------------------------------------------------------+
+//| Main calculation                                                  |
+//+------------------------------------------------------------------+
+int OnCalculate(const int rates_total,
+                const int prev_calculated,
+                const datetime &time[],
+                const double &open[],
+                const double &high[],
+                const double &low[],
+                const double &close[],
+                const long &tick_volume[],
+                const long &volume[],
+                const int &spread[]) {
+    
+    if(rates_total < SwingLength + 10) return 0;
+    
+    ArraySetAsSeries(time, true);
+    
+    int limit;
+    if(prev_calculated == 0) {
+        limit = MathMin(MaxBarsToShow, rates_total - SwingLength - 1);
+        ArrayInitialize(BuySignalBuffer, EMPTY_VALUE);
+        ArrayInitialize(SellSignalBuffer, EMPTY_VALUE);
+        g_SwingTrend.direction = 0;
+        g_InternalTrend.direction = 0;
+        g_OBCount = 0;
+    } else {
+        limit = rates_total - prev_calculated + 1;
+    }
+    
+    // Clear old objects
+    if(prev_calculated > 0) {
+        DeleteOldObjects(MaxBarsToShow);
+    }
+    
+    // Calculate
+    for(int i = limit; i >= 0; i--) {
+        BuySignalBuffer[i] = EMPTY_VALUE;
+        SellSignalBuffer[i] = EMPTY_VALUE;
+        
+        // Swing structure
+        UpdatePivot(i, SwingLength, g_SwingHigh, g_SwingLow, g_SwingTrend, false);
+        CheckBreak(i, g_SwingHigh, g_SwingLow, g_SwingTrend, false);
+        
+        // Internal structure
+        if(ShowInternalStructure) {
+            UpdatePivot(i, InternalLength, g_InternalHigh, g_InternalLow, g_InternalTrend, true);
+            CheckBreak(i, g_InternalHigh, g_InternalLow, g_InternalTrend, true);
+        }
+        
+        // OB mitigation
+        if(ShowOrderBlocks) {
+            CheckOBMitigation(i);
+        }
+    }
+    
+    // Draw OBs
+    if(ShowOrderBlocks) {
+        DrawOrderBlocks();
+    }
+    
+    return rates_total;
+}
+//+------------------------------------------------------------------+
