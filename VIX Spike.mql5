@@ -1,0 +1,413 @@
+//+------------------------------------------------------------------+
+//|                                                    VixSpike.mq5  |
+//|                     Copyright 2025, Based on original Pine code |
+//|              This Source Code Form is subject to the terms of   |
+//|              the Mozilla Public License, v. 2.0. If a copy of   |
+//|              the MPL was not distributed with this file, You    |
+//|              can obtain one at https://mozilla.org/MPL/2.0/.    |
+//+------------------------------------------------------------------+
+#property copyright "MPL 2.0 - Based on mvs1231 || xxattax original"
+#property link      "https://mozilla.org/MPL/2.0/"
+#property version   "2.00"
+#property indicator_chart_window
+#property indicator_buffers 9
+#property indicator_plots   2
+
+//--- Plot settings
+#property indicator_label1  "Buy Signal"
+#property indicator_type1   DRAW_ARROW
+#property indicator_color1  clrLime
+#property indicator_width1  2
+
+#property indicator_label2  "Sell Signal"
+#property indicator_type2   DRAW_ARROW
+#property indicator_color2  clrRed
+#property indicator_width2  2
+
+//+------------------------------------------------------------------+
+//| Input Parameters                                                 |
+//+------------------------------------------------------------------+
+input group "=== VIX Calculation Parameters ==="
+input int      InpVixPeriod          = 14;    // VIX Period
+input int      InpSpikePeriod        = 150;   // Highest VIX Lookback Period
+
+input group "=== Signal Settings ==="
+input bool     InpUseSignalFilter    = false; // Use Signal Filter (Reduce False Signals)
+input int      InpFilterBars         = 3;     // Minimum Bars Between Signals
+input double   InpThresholdMultiplier= 0.85;  // Threshold Multiplier (0.5-1.5)
+
+input group "=== Display Settings ==="
+input bool     InpShowArrows         = true;  // Show Buy/Sell Arrows
+input bool     InpShowDashboard      = true;  // Show Info Dashboard
+input int      InpDashboardX         = 20;    // Dashboard X Position
+input int      InpDashboardY         = 30;    // Dashboard Y Position
+input color    InpDashboardColor     = clrWhite; // Dashboard Text Color
+
+input group "=== Alert Settings ==="
+input bool     InpEnableAlerts       = true;  // Enable Alerts
+input bool     InpEnablePushNotif    = false; // Enable Push Notifications
+input bool     InpEnableEmail        = false; // Enable Email Alerts
+
+//+------------------------------------------------------------------+
+//| Indicator Buffers                                                |
+//+------------------------------------------------------------------+
+double BuySignalBuffer[];
+double SellSignalBuffer[];
+double VixBuyBuffer[];
+double VixSellBuffer[];
+double HighestVixBuyBuffer[];
+double HighestVixSellBuffer[];
+double HighestAvgBuffer[];
+double PrevVixBuyBuffer[];
+double PrevVixSellBuffer[];
+
+//--- Global variables
+string objPrefix = "VixSpike_";
+int lastBuyBar = -1;
+int lastSellBar = -1;
+
+//+------------------------------------------------------------------+
+//| Custom indicator initialization function                         |
+//+------------------------------------------------------------------+
+int OnInit()
+{
+   //--- Validate inputs
+   if(InpVixPeriod < 2)
+   {
+      Print("Error: VIX Period must be at least 2");
+      return(INIT_PARAMETERS_INCORRECT);
+   }
+   if(InpSpikePeriod < InpVixPeriod)
+   {
+      Print("Error: Spike Period must be greater than or equal to VIX Period");
+      return(INIT_PARAMETERS_INCORRECT);
+   }
+   
+   //--- Set buffer arrays
+   SetIndexBuffer(0, BuySignalBuffer, INDICATOR_DATA);
+   SetIndexBuffer(1, SellSignalBuffer, INDICATOR_DATA);
+   SetIndexBuffer(2, VixBuyBuffer, INDICATOR_CALCULATIONS);
+   SetIndexBuffer(3, VixSellBuffer, INDICATOR_CALCULATIONS);
+   SetIndexBuffer(4, HighestVixBuyBuffer, INDICATOR_CALCULATIONS);
+   SetIndexBuffer(5, HighestVixSellBuffer, INDICATOR_CALCULATIONS);
+   SetIndexBuffer(6, HighestAvgBuffer, INDICATOR_CALCULATIONS);
+   SetIndexBuffer(7, PrevVixBuyBuffer, INDICATOR_CALCULATIONS);
+   SetIndexBuffer(8, PrevVixSellBuffer, INDICATOR_CALCULATIONS);
+   
+   //--- Set arrow codes
+   PlotIndexSetInteger(0, PLOT_ARROW, 233); // Up arrow
+   PlotIndexSetInteger(1, PLOT_ARROW, 234); // Down arrow
+   
+   //--- Set arrow displacement
+   PlotIndexSetInteger(0, PLOT_ARROW_SHIFT, -10);
+   PlotIndexSetInteger(1, PLOT_ARROW_SHIFT, 10);
+   
+   //--- Set empty value
+   PlotIndexSetDouble(0, PLOT_EMPTY_VALUE, 0);
+   PlotIndexSetDouble(1, PLOT_EMPTY_VALUE, 0);
+   
+   //--- Initialize buffers with empty values
+   ArraySetAsSeries(BuySignalBuffer, true);
+   ArraySetAsSeries(SellSignalBuffer, true);
+   ArraySetAsSeries(VixBuyBuffer, true);
+   ArraySetAsSeries(VixSellBuffer, true);
+   ArraySetAsSeries(HighestVixBuyBuffer, true);
+   ArraySetAsSeries(HighestVixSellBuffer, true);
+   ArraySetAsSeries(HighestAvgBuffer, true);
+   ArraySetAsSeries(PrevVixBuyBuffer, true);
+   ArraySetAsSeries(PrevVixSellBuffer, true);
+   
+   //--- Set indicator name
+   string shortName = StringFormat("VixSpike(%d,%d)", InpVixPeriod, InpSpikePeriod);
+   IndicatorSetString(INDICATOR_SHORTNAME, shortName);
+   
+   //--- Set digits
+   IndicatorSetInteger(INDICATOR_DIGITS, _Digits);
+   
+   return(INIT_SUCCEEDED);
+}
+
+//+------------------------------------------------------------------+
+//| Custom indicator deinitialization function                       |
+//+------------------------------------------------------------------+
+void OnDeinit(const int reason)
+{
+   //--- Delete all objects created by indicator
+   ObjectsDeleteAll(0, objPrefix);
+   ChartRedraw();
+}
+
+//+------------------------------------------------------------------+
+//| Custom indicator iteration function                              |
+//+------------------------------------------------------------------+
+int OnCalculate(const int rates_total,
+                const int prev_calculated,
+                const datetime &time[],
+                const double &open[],
+                const double &high[],
+                const double &low[],
+                const double &close[],
+                const long &tick_volume[],
+                const long &volume[],
+                const int &spread[])
+{
+   //--- Set arrays as series
+   ArraySetAsSeries(high, true);
+   ArraySetAsSeries(low, true);
+   ArraySetAsSeries(close, true);
+   ArraySetAsSeries(time, true);
+   
+   //--- Check for minimum bars
+   if(rates_total < InpSpikePeriod + InpVixPeriod)
+      return(0);
+   
+   //--- Determine calculation start
+   int start = prev_calculated - 1;
+   if(start < InpSpikePeriod)
+      start = InpSpikePeriod;
+   
+   //--- Main calculation loop
+   for(int i = start; i >= 0; i--)
+   {
+      //--- Calculate VixBuy
+      double highestClose = GetHighestClose(close, i, InpVixPeriod);
+      if(highestClose > 0)
+         VixBuyBuffer[i] = ((highestClose - low[i]) / highestClose) * 100.0;
+      else
+         VixBuyBuffer[i] = 0;
+      
+      //--- Calculate VixSell
+      double lowestClose = GetLowestClose(close, i, InpVixPeriod);
+      if(lowestClose > 0)
+         VixSellBuffer[i] = ((high[i] - lowestClose) / lowestClose) * 100.0;
+      else
+         VixSellBuffer[i] = 0;
+      
+      //--- Calculate Highest VixBuy
+      HighestVixBuyBuffer[i] = GetHighestValue(VixBuyBuffer, i, InpSpikePeriod);
+      
+      //--- Calculate Highest VixSell
+      HighestVixSellBuffer[i] = GetHighestValue(VixSellBuffer, i, InpSpikePeriod);
+      
+      //--- Calculate Highest Average with threshold multiplier
+      HighestAvgBuffer[i] = (HighestVixBuyBuffer[i] + HighestVixSellBuffer[i]) / 2.0 * InpThresholdMultiplier;
+      
+      //--- Store previous values for crossunder detection
+      if(i < rates_total - 1)
+      {
+         PrevVixBuyBuffer[i] = VixBuyBuffer[i + 1];
+         PrevVixSellBuffer[i] = VixSellBuffer[i + 1];
+      }
+      
+      //--- Initialize signal buffers
+      BuySignalBuffer[i] = 0;
+      SellSignalBuffer[i] = 0;
+      
+      //--- Detect Buy Signal (VixBuy crosses under HighestAvg)
+      if(i < rates_total - 1)
+      {
+         bool buySignal = false;
+         bool sellSignal = false;
+         
+         if(PrevVixBuyBuffer[i] >= HighestAvgBuffer[i + 1] && 
+            VixBuyBuffer[i] < HighestAvgBuffer[i])
+         {
+            buySignal = true;
+         }
+         
+         if(PrevVixSellBuffer[i] >= HighestAvgBuffer[i + 1] && 
+            VixSellBuffer[i] < HighestAvgBuffer[i])
+         {
+            sellSignal = true;
+         }
+         
+         //--- Apply signal filter if enabled
+         if(InpUseSignalFilter)
+         {
+            if(buySignal && (rates_total - i - lastBuyBar) < InpFilterBars)
+               buySignal = false;
+            if(sellSignal && (rates_total - i - lastSellBar) < InpFilterBars)
+               sellSignal = false;
+         }
+         
+         //--- Set signals
+         if(buySignal && InpShowArrows)
+         {
+            BuySignalBuffer[i] = low[i];
+            lastBuyBar = rates_total - i;
+            
+            //--- Trigger alerts for new bar only
+            if(i == 0 && InpEnableAlerts)
+            {
+               SendAlertNotification("BUY", time[i]);
+            }
+         }
+         
+         if(sellSignal && InpShowArrows)
+         {
+            SellSignalBuffer[i] = high[i];
+            lastSellBar = rates_total - i;
+            
+            //--- Trigger alerts for new bar only
+            if(i == 0 && InpEnableAlerts)
+            {
+               SendAlertNotification("SELL", time[i]);
+            }
+         }
+      }
+   }
+   
+   //--- Update dashboard
+   if(InpShowDashboard)
+   {
+      UpdateDashboard(VixBuyBuffer[0], VixSellBuffer[0], HighestAvgBuffer[0]);
+   }
+   
+   return(rates_total);
+}
+
+//+------------------------------------------------------------------+
+//| Get highest close value in period                                |
+//+------------------------------------------------------------------+
+double GetHighestClose(const double &close[], int start, int period)
+{
+   double highest = close[start];
+   for(int i = start; i < start + period && i < ArraySize(close); i++)
+   {
+      if(close[i] > highest)
+         highest = close[i];
+   }
+   return highest;
+}
+
+//+------------------------------------------------------------------+
+//| Get lowest close value in period                                 |
+//+------------------------------------------------------------------+
+double GetLowestClose(const double &close[], int start, int period)
+{
+   double lowest = close[start];
+   for(int i = start; i < start + period && i < ArraySize(close); i++)
+   {
+      if(close[i] < lowest)
+         lowest = close[i];
+   }
+   return lowest;
+}
+
+//+------------------------------------------------------------------+
+//| Get highest value from buffer in period                          |
+//+------------------------------------------------------------------+
+double GetHighestValue(const double &buffer[], int start, int period)
+{
+   double highest = buffer[start];
+   for(int i = start; i < start + period && i < ArraySize(buffer); i++)
+   {
+      if(buffer[i] > highest)
+         highest = buffer[i];
+   }
+   return highest;
+}
+
+//+------------------------------------------------------------------+
+//| Send alert notification                                          |
+//+------------------------------------------------------------------+
+void SendAlertNotification(string signalType, datetime signalTime)
+{
+   string message = StringFormat("%s Signal on %s %s at %s - VixSpike Indicator",
+                                  signalType,
+                                  _Symbol,
+                                  EnumToString((ENUM_TIMEFRAMES)_Period),
+                                  TimeToString(signalTime));
+   
+   //--- Standard alert
+   Alert(message);
+   
+   //--- Push notification
+   if(InpEnablePushNotif)
+      SendNotification(message);
+   
+   //--- Email alert
+   if(InpEnableEmail)
+      SendMail("VixSpike Signal - " + signalType, message);
+}
+
+//+------------------------------------------------------------------+
+//| Update dashboard display                                         |
+//+------------------------------------------------------------------+
+void UpdateDashboard(double vixBuy, double vixSell, double threshold)
+{
+   string objName = objPrefix + "Dashboard";
+   
+   //--- Create background panel
+   if(ObjectFind(0, objName + "_BG") < 0)
+   {
+      ObjectCreate(0, objName + "_BG", OBJ_RECTANGLE_LABEL, 0, 0, 0);
+      ObjectSetInteger(0, objName + "_BG", OBJPROP_XDISTANCE, InpDashboardX);
+      ObjectSetInteger(0, objName + "_BG", OBJPROP_YDISTANCE, InpDashboardY);
+      ObjectSetInteger(0, objName + "_BG", OBJPROP_XSIZE, 220);
+      ObjectSetInteger(0, objName + "_BG", OBJPROP_YSIZE, 100);
+      ObjectSetInteger(0, objName + "_BG", OBJPROP_BGCOLOR, clrBlack);
+      ObjectSetInteger(0, objName + "_BG", OBJPROP_BORDER_TYPE, BORDER_FLAT);
+      ObjectSetInteger(0, objName + "_BG", OBJPROP_COLOR, clrGray);
+      ObjectSetInteger(0, objName + "_BG", OBJPROP_WIDTH, 1);
+      ObjectSetInteger(0, objName + "_BG", OBJPROP_BACK, false);
+      ObjectSetInteger(0, objName + "_BG", OBJPROP_SELECTABLE, false);
+   }
+   
+   //--- Create or update text labels
+   CreateLabel(objName + "_Title", "VIX SPIKE INDICATOR", InpDashboardX + 10, InpDashboardY + 5, clrYellow, 9, "Arial Bold");
+   
+   string vixBuyText = StringFormat("VIX Buy: %.2f", vixBuy);
+   color vixBuyColor = vixBuy < threshold ? clrLime : InpDashboardColor;
+   CreateLabel(objName + "_VixBuy", vixBuyText, InpDashboardX + 10, InpDashboardY + 25, vixBuyColor, 8, "Arial");
+   
+   string vixSellText = StringFormat("VIX Sell: %.2f", vixSell);
+   color vixSellColor = vixSell < threshold ? clrRed : InpDashboardColor;
+   CreateLabel(objName + "_VixSell", vixSellText, InpDashboardX + 10, InpDashboardY + 45, vixSellColor, 8, "Arial");
+   
+   string thresholdText = StringFormat("Threshold: %.2f", threshold);
+   CreateLabel(objName + "_Threshold", thresholdText, InpDashboardX + 10, InpDashboardY + 65, InpDashboardColor, 8, "Arial");
+   
+   string statusText = "";
+   color statusColor = clrGray;
+   if(vixBuy < threshold)
+   {
+      statusText = ">>> BUY SIGNAL <<<";
+      statusColor = clrLime;
+   }
+   else if(vixSell < threshold)
+   {
+      statusText = ">>> SELL SIGNAL <<<";
+      statusColor = clrRed;
+   }
+   else
+   {
+      statusText = "No Signal";
+      statusColor = clrGray;
+   }
+   CreateLabel(objName + "_Status", statusText, InpDashboardX + 10, InpDashboardY + 82, statusColor, 8, "Arial Bold");
+}
+
+//+------------------------------------------------------------------+
+//| Create or update text label                                      |
+//+------------------------------------------------------------------+
+void CreateLabel(string name, string text, int x, int y, color clr, int fontSize, string font)
+{
+   if(ObjectFind(0, name) < 0)
+   {
+      ObjectCreate(0, name, OBJ_LABEL, 0, 0, 0);
+      ObjectSetInteger(0, name, OBJPROP_CORNER, CORNER_LEFT_UPPER);
+      ObjectSetInteger(0, name, OBJPROP_ANCHOR, ANCHOR_LEFT_UPPER);
+      ObjectSetInteger(0, name, OBJPROP_SELECTABLE, false);
+      ObjectSetInteger(0, name, OBJPROP_HIDDEN, true);
+   }
+   
+   ObjectSetInteger(0, name, OBJPROP_XDISTANCE, x);
+   ObjectSetInteger(0, name, OBJPROP_YDISTANCE, y);
+   ObjectSetInteger(0, name, OBJPROP_COLOR, clr);
+   ObjectSetInteger(0, name, OBJPROP_FONTSIZE, fontSize);
+   ObjectSetString(0, name, OBJPROP_FONT, font);
+   ObjectSetString(0, name, OBJPROP_TEXT, text);
+}
+
+//+------------------------------------------------------------------+
